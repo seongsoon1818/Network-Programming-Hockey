@@ -53,12 +53,20 @@ final class Lobby implements Runnable {
         registeredNames.put(client, nickname);
         tokensByName.put(nickname, token);
         client.send("WELCOME", token.toString());
+        logConnection(nickname, "님이 접속했습니다.");
     }
 
     private void unregister(ClientConnection client) {
         String nickname = registeredNames.remove(client);
         if (nickname != null) {
             tokensByName.remove(nickname);
+            logConnection(nickname, "님이 접속을 종료했습니다.");
         }
+    }
+
+    private void logConnection(String nickname, String message) {
+        // 닉네임에 줄바꿈이나 제어 문자가 있어도 터미널에는 한 줄로 표시한다.
+        String displayName = nickname.replaceAll("[\\p{Cc}\\p{Zl}\\p{Zp}]", " ");
+        System.out.println(displayName + message);
     }
 }
