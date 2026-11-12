@@ -39,3 +39,9 @@ temp/
 .pub
 
 AGENTS*
+
+# Java / IntelliJ
+out/
+*.class
+*.iml
+target/
