@@ -29,8 +29,17 @@ public final class GameState {
     }
 
     public void resetPuck() {
-        puckX = FIELD_WIDTH / 2;
-        puckY = FIELD_HEIGHT / 2;
+        placePuck(FIELD_WIDTH / 2, FIELD_HEIGHT / 2);
+    }
+
+    /** 서브하는 플레이어 진영 한가운데(골대와 중앙선 사이)에 퍽을 멈춰 둔다. */
+    public void placePuckForServe(int server) {
+        placePuck(FIELD_WIDTH / 2, server == 0 ? FIELD_HEIGHT * 3 / 4 : FIELD_HEIGHT / 4);
+    }
+
+    private void placePuck(double x, double y) {
+        puckX = x;
+        puckY = y;
         puckVx = 0;
         puckVy = 0;
     }

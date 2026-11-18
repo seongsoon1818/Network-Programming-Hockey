@@ -32,7 +32,10 @@ final class ConnectPanel extends JPanel {
     private final JLabel statusLabel = new JLabel(" ");
     private final Consumer<Connection> onConnected;
 
-    ConnectPanel(Consumer<Connection> onConnected) {
+    /**
+     * @param onPractice 서버 없이 연습 모드를 시작할 때 부른다.
+     */
+    ConnectPanel(Consumer<Connection> onConnected, Runnable onPractice) {
         this.onConnected = onConnected;
         setLayout(new GridBagLayout());
         setBorder(BorderFactory.createEmptyBorder(24, 32, 24, 32));
@@ -58,6 +61,10 @@ final class ConnectPanel extends JPanel {
         c.gridwidth = 2;
         add(connectButton, c);
         c.gridy = 5;
+        JButton practiceButton = new JButton("연습 모드 (서버 없이)");
+        practiceButton.addActionListener(e -> onPractice.run());
+        add(practiceButton, c);
+        c.gridy = 6;
         add(statusLabel, c);
 
         connectButton.addActionListener(e -> connect());
