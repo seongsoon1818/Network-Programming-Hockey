@@ -16,7 +16,9 @@ import java.awt.event.MouseEvent;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
+import java.awt.geom.Area;
 import java.awt.geom.Rectangle2D;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 
 import static hockey.common.physics.PhysicsConstants.*;
@@ -269,8 +271,11 @@ final class GameView extends JComponent {
 
     /** 경기장 좌표로 그린다. */
     private void paintTable(Graphics2D g) {
+        // 경기장은 모서리가 둥글다(물리와 같은 반지름).
+        double c = CORNER_RADIUS;
+        RoundRectangle2D field = new RoundRectangle2D.Double(0, 0, FIELD_WIDTH, FIELD_HEIGHT, 2 * c, 2 * c);
         g.setColor(TABLE);
-        g.fill(new Rectangle2D.Double(0, 0, FIELD_WIDTH, FIELD_HEIGHT));
+        g.fill(field);
 
         g.setColor(LINE);
         g.setStroke(new BasicStroke(3));
@@ -286,13 +291,13 @@ final class GameView extends JComponent {
 
         // 벽: 골대 입구만 비운다. 입구는 지키는 플레이어 색으로 표시한다.
         double t = WALL_THICKNESS;
+        Area wall = new Area(new RoundRectangle2D.Double(-t, -t, FIELD_WIDTH + 2 * t, FIELD_HEIGHT + 2 * t,
+                2 * (c + t), 2 * (c + t)));
+        wall.subtract(new Area(field));
+        wall.subtract(new Area(new Rectangle2D.Double(GOAL_LEFT, -t, GOAL_WIDTH, t)));
+        wall.subtract(new Area(new Rectangle2D.Double(GOAL_LEFT, FIELD_HEIGHT, GOAL_WIDTH, t)));
         g.setColor(WALL);
-        g.fill(new Rectangle2D.Double(-t, -t, t, FIELD_HEIGHT + 2 * t));
-        g.fill(new Rectangle2D.Double(FIELD_WIDTH, -t, t, FIELD_HEIGHT + 2 * t));
-        g.fill(new Rectangle2D.Double(0, -t, GOAL_LEFT, t));
-        g.fill(new Rectangle2D.Double(GOAL_RIGHT, -t, FIELD_WIDTH - GOAL_RIGHT, t));
-        g.fill(new Rectangle2D.Double(0, FIELD_HEIGHT, GOAL_LEFT, t));
-        g.fill(new Rectangle2D.Double(GOAL_RIGHT, FIELD_HEIGHT, FIELD_WIDTH - GOAL_RIGHT, t));
+        g.fill(wall);
         g.setColor(withAlpha(PLAYER[1], 150));
         g.fill(new Rectangle2D.Double(GOAL_LEFT, -t, GOAL_WIDTH, t));
         g.setColor(withAlpha(PLAYER[0], 150));
