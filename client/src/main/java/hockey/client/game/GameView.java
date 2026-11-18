@@ -3,6 +3,7 @@ package hockey.client.game;
 import hockey.common.physics.GameState;
 
 import javax.swing.JComponent;
+import javax.swing.SwingUtilities;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -10,7 +11,11 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.MouseInfo;
+import java.awt.Point;
+import java.awt.PointerInfo;
 import java.awt.RenderingHints;
+import java.awt.Window;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.AffineTransform;
@@ -95,6 +100,9 @@ final class GameView extends JComponent {
     /**
      * 그릴 상태를 정한다. 물리는 60Hz 고정이고 화면 갱신 시점은 그 사이 어디든 될 수 있으므로
      * 직전 틱과 현재 틱 사이를 alpha(0~1)만큼 섞는다.
+     *
+     * 내 말렛도 똑같이 섞는다. 최신 틱 위치를 그대로 그리거나 마우스 쪽으로 앞서 그려 보기도
+     * 했는데, 틱과 프레임 시각이 어긋나 끊겨 보이거나 퍽과 어긋나 보여 오히려 불편했다.
      */
     void setFrame(GameState previous, GameState current, double alpha) {
         shown.puckX = mix(previous.puckX, current.puckX, alpha);
@@ -122,6 +130,7 @@ final class GameView extends JComponent {
             out[1] = match.state().malletY[me];
             return;
         }
+        readPointer();
         double scale = scale();
         double x = (mouseX - originX(scale)) / scale;
         double y = (mouseY - originY(scale)) / scale;
@@ -131,6 +140,25 @@ final class GameView extends JComponent {
         }
         out[0] = x;
         out[1] = y;
+    }
+
+    /**
+     * 마우스가 창 밖으로 나가도 계속 따라가도록, 창이 앞에 있는 동안은 화면 전체 기준 커서 위치를 직접 읽는다.
+     * (마우스 이벤트는 커서가 창 안에 있을 때만 온다.) 경기장 밖 좌표는 물리가 진영·벽 안으로 잘라 준다.
+     */
+    private void readPointer() {
+        Window window = SwingUtilities.getWindowAncestor(this);
+        if (window == null || !window.isFocused() || !isShowing()) {
+            return; // 다른 창을 쓰는 중이면 마지막 위치 그대로
+        }
+        PointerInfo pointer = MouseInfo.getPointerInfo();
+        if (pointer == null) {
+            return;
+        }
+        Point p = pointer.getLocation();
+        SwingUtilities.convertPointFromScreen(p, this);
+        mouseX = p.x;
+        mouseY = p.y;
     }
 
     private double scale() {
