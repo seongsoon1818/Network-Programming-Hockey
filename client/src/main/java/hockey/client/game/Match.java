@@ -30,6 +30,11 @@ public interface Match {
         return null;
     }
 
+    /** 내 이름 자리에 잠깐 띄울 짧은 경고(예: 서브권이 넘어가기까지 남은 시간). 없으면 null. */
+    default String hint() {
+        return null;
+    }
+
     /** 경기장을 클릭했을 때(예: 끝난 연습 판 다시 시작). */
     default void onClick() {}
 }

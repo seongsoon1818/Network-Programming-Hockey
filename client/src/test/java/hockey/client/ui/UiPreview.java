@@ -232,6 +232,27 @@ public final class UiPreview {
             save(game, 520, 860, new File(dir, "game-p" + me + ".png"));
             game.stop();
         }
+        saveServePngs(dir);
+    }
+
+    /** 서브 장면: 시작 카운트다운과, 내 서브를 붙잡고 있을 때 뜨는 경고. */
+    private static void saveServePngs(File dir) {
+        PracticeMatch match;
+        do {
+            match = new PracticeMatch(0, "chan", 5);
+        } while (!"내 서브".equals(match.overlayDetail()));
+        GamePanel game = new GamePanel(() -> {});
+        game.start(match, "미리보기 · 서브 카운트다운");
+        save(game, 520, 860, new File(dir, "game-serve.png"));
+        game.stop();
+
+        // 카운트다운 3초 + 8초 동안 퍽을 치지 않으면 남은 2초 경고가 뜬다.
+        for (int i = 0; i < 11 * 60; i++) {
+            match.tick(40, 760);
+        }
+        game.start(match, "미리보기 · 서브 시간 경고");
+        save(game, 520, 860, new File(dir, "game-hint.png"));
+        game.stop();
     }
 
     private static void save(JPanel panel, int width, int height, File file) {

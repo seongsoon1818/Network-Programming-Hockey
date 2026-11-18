@@ -35,6 +35,7 @@ final class GameView extends JComponent {
     private static final Color PUCK = new Color(0xF5D547);
     private static final Color[] PLAYER = {new Color(0xE5484D), new Color(0x3B82F6)};
     private static final Color TEXT = new Color(0xE8EEF7);
+    private static final Color HINT = new Color(0xF59E0B);
 
     /** 위아래 이름·점수 줄의 높이(px). */
     private static final int STRIP = 44;
@@ -312,14 +313,17 @@ final class GameView extends JComponent {
         g.setColor(PLAYER[player]);
         g.fillOval(x + 2, centerY - 7, 14, 14);
 
-        g.setColor(TEXT);
-        g.setFont(getFont().deriveFont(Font.PLAIN, 16f));
+        // 경고가 있으면 이름 대신 띄운다(닉네임이 12자까지라 나란히 두면 겹친다).
+        String hint = player == match.me() ? match.hint() : null;
+        g.setColor(hint == null ? TEXT : HINT);
+        g.setFont(getFont().deriveFont(hint == null ? Font.PLAIN : Font.BOLD, 16f));
         FontMetrics fm = g.getFontMetrics();
-        String name = match.name(player) + (player == match.me() ? " (나)" : "");
+        String name = hint != null ? hint : match.name(player) + (player == match.me() ? " (나)" : "");
         g.drawString(name, x + 24, centerY + (fm.getAscent() - fm.getDescent()) / 2);
 
         g.setFont(getFont().deriveFont(Font.BOLD, 26f));
         fm = g.getFontMetrics();
+        g.setColor(TEXT);
         String score = String.valueOf(match.score(player));
         g.drawString(score, x + width - fm.stringWidth(score) - 2, centerY + (fm.getAscent() - fm.getDescent()) / 2);
     }
