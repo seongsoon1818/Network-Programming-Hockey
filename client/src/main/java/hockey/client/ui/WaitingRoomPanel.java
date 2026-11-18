@@ -133,20 +133,21 @@ final class WaitingRoomPanel extends JPanel {
                 Member member = i < newRoom.members().size() ? newRoom.members().get(i) : null;
                 boolean isMe = member != null && member.name().equals(newRoom.myName());
                 // 방장 화면에서만, 그리고 게스트 자리에만 내보내기 버튼이 보인다.
-                slots[i].show(member, isMe, host && member != null && !member.host());
+                slots[i].show(member, isMe, host && !newRoom.started() && member != null && !member.host());
             }
             scoreBox.setSelectedItem(newRoom.settings().targetScore());
             publicBox.setSelected(newRoom.settings().isPublic());
-            scoreBox.setEnabled(host);
-            publicBox.setEnabled(host);
+            scoreBox.setEnabled(host && !newRoom.started());
+            publicBox.setEnabled(host && !newRoom.started());
 
             // 방장은 준비 대신 시작 버튼을 쓴다.
             Member me = newRoom.me();
             readyButton.setVisible(!host);
+            readyButton.setEnabled(!newRoom.started());
             readyButton.setText(me != null && me.ready() ? "준비 취소" : "준비");
             startButton.setVisible(host);
             inviteButton.setVisible(host);
-            inviteButton.setEnabled(newRoom.members().size() < RoomSummary.CAPACITY);
+            inviteButton.setEnabled(!newRoom.started() && newRoom.members().size() < RoomSummary.CAPACITY);
             startButton.setEnabled(newRoom.canStart());
             statusLabel.setForeground(Color.DARK_GRAY);
             statusLabel.setText(describe(newRoom, host));
@@ -156,6 +157,9 @@ final class WaitingRoomPanel extends JPanel {
     }
 
     private static String describe(RoomView room, boolean host) {
+        if (room.started()) {
+            return "시작 승인 완료 · 온라인 경기 연결은 다음 단계에서 진행합니다.";
+        }
         if (room.members().size() < RoomSummary.CAPACITY) {
             return host ? "상대를 기다리는 중입니다. 방 코드를 알려 주거나 초대하세요." : "방장을 기다리는 중입니다.";
         }

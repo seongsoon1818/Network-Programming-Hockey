@@ -3,7 +3,10 @@ package hockey.client.ui;
 import hockey.client.game.GamePanel;
 import hockey.client.game.PracticeMatch;
 import hockey.client.model.RoomSettings;
+import hockey.client.model.RoomSummary;
+import hockey.client.model.RoomView;
 import hockey.client.net.Connection;
+import hockey.common.protocol.Message.*;
 import hockey.common.protocol.Message.Reply;
 
 import javax.swing.JFrame;
@@ -16,6 +19,8 @@ import java.awt.Rectangle;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** 메인 창. 화면(접속 → 로비 → 대기실 → 게임) 전환과 현재 연결을 관리한다. 모든 메서드는 EDT에서 돈다. */
 public final class ClientFrame extends JFrame {
@@ -33,6 +38,12 @@ public final class ClientFrame extends JFrame {
     private final WaitingRoomPanel roomPanel = new WaitingRoomPanel(new RoomHandler());
     private final GamePanel gamePanel = new GamePanel(this::exitGame);
     private Connection connection;
+    // 버튼을 누른 순서대로 전송하면서 EDT의 화면 처리를 계속한다.
+    private final ExecutorService requests = Executors.newSingleThreadExecutor(task -> {
+        Thread sender = new Thread(task, "lobby-requests");
+        sender.setDaemon(true);
+        return sender;
+    });
     private String currentCard = CARD_CONNECT;
     /** 게임 화면에서 나갈 때 돌아갈 화면과 창 크기. */
     private String cardBeforeGame = CARD_CONNECT;
@@ -54,6 +65,7 @@ public final class ClientFrame extends JFrame {
             public void windowClosing(WindowEvent e) {
                 gamePanel.stop();
                 closeConnection();
+                requests.shutdownNow();
             }
         });
     }
@@ -78,16 +90,74 @@ public final class ClientFrame extends JFrame {
                 SwingUtilities.invokeLater(() -> handleDisconnected(newConnection));
             }
         });
+        sendRequest(new ListRooms());
     }
 
     private void handleMessage(Connection source, Reply message) {
         if (source != connection) {
             return; // 이미 끊은 연결에서 늦게 도착한 메시지
         }
-        // 방·게임 메시지 형식이 정해지면 여기서 화면별로 넘긴다:
-        //   방 목록 → lobbyPanel.setRooms, 접속자 목록 → lobbyPanel.setUsers,
-        //   방 상태 → roomPanel.showRoom + show(CARD_ROOM), 초대 → InviteDialog.show(수락하면 게스트로 입장),
-        //   내보내짐 → onKicked()
+        switch (message) {
+            case RoomList m -> lobbyPanel.setRooms(m.rooms().stream()
+                    .map(room -> new RoomSummary(room.code(), room.hostName(), room.targetScore(), room.playerCount()))
+                    .toList());
+            case RoomUpdate m -> {
+                RoomView view = new RoomView(m.code(), new RoomSettings(m.targetScore(), m.isPublic()),
+                        m.members().stream().map(member -> new RoomView.Member(member.name(), member.host(), member.ready()))
+                                .toList(), source.session().nickname(), m.started());
+                roomPanel.showRoom(view);
+                show(CARD_ROOM);
+            }
+            case RoomLeft m -> {
+                show(CARD_LOBBY);
+                lobbyPanel.showStatus("방에서 나왔습니다.", false);
+                sendRequest(new ListRooms());
+            }
+            case JoinFailed m -> {
+                showRoomError(m.reason());
+                sendRequest(new ListRooms());
+            }
+            case RoomFailed m -> showRoomError(m.reason());
+            case GameStart m -> roomPanel.showStatus("시작 승인 완료 · " + (m.side() + 1)
+                    + "P · 온라인 경기 연결은 다음 단계에서 진행합니다.", false);
+            default -> { }
+        }
+    }
+
+    private void sendRequest(Request request) {
+        Connection source = connection;
+        if (source == null) {
+            return;
+        }
+        requests.execute(() -> {
+            try {
+                source.send(request);
+            } catch (IOException e) {
+                source.close();
+                SwingUtilities.invokeLater(() -> handleDisconnected(source));
+            }
+        });
+    }
+
+    private void showRoomError(RoomFailReason reason) {
+        String text = switch (reason) {
+            case NOT_REGISTERED -> "먼저 접속해 주세요.";
+            case ALREADY_IN_ROOM -> "현재 방에서 나온 뒤 다시 요청해 주세요.";
+            case NOT_IN_ROOM -> "먼저 방에 입장해 주세요.";
+            case NOT_FOUND -> "해당 코드의 방이 없습니다.";
+            case FULL -> "가득 찬 방입니다.";
+            case STARTED -> "이미 시작한 방입니다.";
+            case HOST_ONLY -> "방장만 사용할 수 있습니다.";
+            case GUEST_ONLY -> "게스트만 준비 상태를 변경할 수 있습니다.";
+            case NOT_READY -> "상대가 입장하고 준비해야 시작할 수 있습니다.";
+            case INVALID_SETTINGS -> "목표 점수는 3, 5, 7, 10 중에서 선택해 주세요.";
+            case UNKNOWN -> "요청을 처리하지 못했습니다.";
+        };
+        if (currentCard.equals(CARD_ROOM)) {
+            roomPanel.showStatus(text, true);
+        } else {
+            lobbyPanel.showStatus(text, true);
+        }
     }
 
     private void handleDisconnected(Connection source) {
@@ -153,21 +223,21 @@ public final class ClientFrame extends JFrame {
         show(cardBeforeGame);
     }
 
-    /** 로비 버튼 처리. 방·초대는 서버 메시지 형식이 정해지면 connection.send로 바꾼다. */
+    /** 로비 버튼의 요청은 서버 응답이 도착한 뒤 화면에 반영한다. */
     private final class LobbyHandler implements LobbyPanel.Actions {
         @Override
         public void createRoom(RoomSettings settings) {
-            lobbyPanel.showStatus(NOT_YET, true);
+            sendRequest(new CreateRoom(settings.targetScore(), settings.isPublic()));
         }
 
         @Override
         public void joinRoom(String code) {
-            lobbyPanel.showStatus(NOT_YET, true);
+            sendRequest(new JoinRoom(code));
         }
 
         @Override
         public void refreshRooms() {
-            lobbyPanel.showStatus(NOT_YET, true);
+            sendRequest(new ListRooms());
         }
 
         @Override
@@ -186,21 +256,21 @@ public final class ClientFrame extends JFrame {
         }
     }
 
-    /** 대기실 버튼 처리. 서버 연동 전이라 나가기만 동작한다. 접속자 목록을 받으면 roomPanel.setLobbyUsers로도 넘긴다. */
+    /** 준비·설정·시작·퇴장을 요청하고 서버가 확정한 방 상태를 기다린다. */
     private final class RoomHandler implements WaitingRoomPanel.Actions {
         @Override
         public void setReady(boolean ready) {
-            roomPanel.showStatus(NOT_YET, true);
+            sendRequest(new Ready(ready));
         }
 
         @Override
         public void changeSettings(RoomSettings settings) {
-            roomPanel.showStatus(NOT_YET, true);
+            sendRequest(new Settings(settings.targetScore(), settings.isPublic()));
         }
 
         @Override
         public void startGame() {
-            roomPanel.showStatus(NOT_YET, true);
+            sendRequest(new Start());
         }
 
         @Override
@@ -215,7 +285,7 @@ public final class ClientFrame extends JFrame {
 
         @Override
         public void leaveRoom() {
-            show(CARD_LOBBY);
+            sendRequest(new LeaveRoom());
         }
     }
 }
