@@ -1,20 +1,20 @@
 package org.example.server;
 
+import hockey.common.protocol.Message;
+import hockey.common.protocol.MessageCodec;
+
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
-import java.net.ProtocolException;
 import java.net.Socket;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 final class ClientConnection implements Runnable {
-    private record Reply(String command, String value) {}
-
     private final Socket socket;
     private final Lobby lobby;
-    private final BlockingQueue<Reply> replies = new LinkedBlockingQueue<>();
+    private final BlockingQueue<Message.Reply> replies = new LinkedBlockingQueue<>();
 
     ClientConnection(Socket socket, Lobby lobby) {
         this.socket = socket;
@@ -27,12 +27,11 @@ final class ClientConnection implements Runnable {
         sender.start();
         try (socket; DataInputStream in = new DataInputStream(socket.getInputStream())) {
             while (true) {
-                String command = in.readUTF();
-                switch (command) {
-                    case "HELLO" -> lobby.postHello(this, in.readUTF());
-                    case "QUIT" -> { return; }
-                    default -> throw new ProtocolException("지원하지 않는 명령입니다.");
+                Message.Request request = MessageCodec.readRequest(in);
+                if (request instanceof Message.Quit) {
+                    return;
                 }
+                lobby.post(this, request);
             }
         } catch (EOFException e) {
             // 상대가 소켓을 닫으면 아래에서 로비 등록도 정리한다.
@@ -44,19 +43,16 @@ final class ClientConnection implements Runnable {
         }
     }
 
-    void send(String command, String value) {
-        replies.add(new Reply(command, value));
+    void send(Message.Reply reply) {
+        replies.add(reply);
     }
 
     private void writeReplies() {
-        // 이 연결의 출력은 송신 스레드 하나가 맡아 두 UTF 필드의 순서를 지킨다.
+        // 연결별 송신 스레드만 쓰므로 방 상태와 응답의 필드가 섞이지 않는다.
         try {
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             while (!Thread.currentThread().isInterrupted()) {
-                Reply reply = replies.take();
-                out.writeUTF(reply.command());
-                out.writeUTF(reply.value());
-                out.flush();
+                MessageCodec.writeReply(out, replies.take());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

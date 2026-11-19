@@ -87,7 +87,7 @@ public final class Connection implements Closeable {
                     socket.close();
                     return new HelloResult(null, failed.reason());
                 }
-                case Unknown unknown -> throw new ProtocolException("HELLO 응답이 아닌 메시지: " + unknown.command());
+                default -> throw new ProtocolException("HELLO 응답이 아닌 메시지: " + reply);
             }
         } catch (IOException | RuntimeException e) {
             try {

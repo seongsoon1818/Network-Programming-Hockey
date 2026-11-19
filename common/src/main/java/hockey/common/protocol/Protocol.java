@@ -3,9 +3,8 @@ package hockey.common.protocol;
 /**
  * 프로토콜 상수. 서버(feat/server/connection)의 형식을 따른다.
  *
- * 모든 필드는 DataOutputStream.writeUTF 문자열이다.
- *   - C→S: 명령 + 명령별 인자   (HELLO 닉네임 / QUIT)
- *   - S→C: 명령 + 값, 항상 두 필드 (WELCOME 토큰 / HELLO_FAILED 사유)
+ * 명령은 writeUTF이며 이후 필드 순서와 자료형은 MessageCodec이 정의한다.
+ * HELLO, WELCOME, HELLO_FAILED, QUIT은 기존 접속 형식을 유지한다.
  */
 public final class Protocol {
     private Protocol() {}
@@ -15,8 +14,21 @@ public final class Protocol {
     // C→S
     public static final String HELLO = "HELLO";
     public static final String QUIT = "QUIT";
+    public static final String CREATE_ROOM = "CREATE_ROOM";
+    public static final String JOIN_ROOM = "JOIN_ROOM";
+    public static final String LIST_ROOMS = "LIST_ROOMS";
+    public static final String READY = "READY";
+    public static final String SETTINGS = "SETTINGS";
+    public static final String START = "START";
+    public static final String LEAVE_ROOM = "LEAVE_ROOM";
 
     // S→C
     public static final String WELCOME = "WELCOME";
     public static final String HELLO_FAILED = "HELLO_FAILED";
+    public static final String ROOM_UPDATE = "ROOM_UPDATE";
+    public static final String ROOM_LIST = "ROOM_LIST";
+    public static final String ROOM_LEFT = "ROOM_LEFT";
+    public static final String JOIN_FAILED = "JOIN_FAILED";
+    public static final String ROOM_FAILED = "ROOM_FAILED";
+    public static final String GAME_START = "GAME_START";
 }

@@ -1,20 +1,28 @@
 package org.example.server;
 
+import hockey.common.protocol.Message.*;
+import hockey.common.protocol.Protocol;
+
+import java.security.SecureRandom;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 final class Lobby implements Runnable {
+    private static final String CODE_CHARACTERS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    private final SecureRandom random = new SecureRandom();
     private final BlockingQueue<Runnable> events = new LinkedBlockingQueue<>();
-    // 로비 스레드만 두 맵을 변경한다. 등록 전은 CONNECTED, 등록 후는 LOBBY 상태다.
-    private final Map<ClientConnection, String> registeredNames = new HashMap<>();
-    private final Map<String, UUID> tokensByName = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    // 등록, 방 입장, 준비, 종료는 모두 이 로비 스레드에서 순서대로 처리한다.
+    private final Map<ClientConnection, PlayerSession> players = new HashMap<>();
+    private final Map<String, PlayerSession> playersByName = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    private final Map<String, Room> rooms = new LinkedHashMap<>();
 
-    void postHello(ClientConnection client, String nickname) {
-        events.add(() -> register(client, nickname));
+    void post(ClientConnection client, Request request) {
+        events.add(() -> handle(client, request));
     }
 
     void postDisconnect(ClientConnection client) {
@@ -32,40 +40,250 @@ final class Lobby implements Runnable {
         }
     }
 
-    private void register(ClientConnection client, String rawName) {
-        if (registeredNames.containsKey(client)) {
-            client.send("HELLO_FAILED", "ALREADY_REGISTERED");
+    private void handle(ClientConnection client, Request request) {
+        if (request instanceof Hello hello) {
+            register(client, hello.nickname());
             return;
         }
+        PlayerSession player = players.get(client);
+        if (player == null) {
+            fail(client, commandOf(request), RoomFailReason.NOT_REGISTERED);
+            return;
+        }
+        switch (request) {
+            case CreateRoom m -> createRoom(player, m);
+            case JoinRoom m -> joinRoom(player, m.code());
+            case ListRooms m -> {
+                player.watchingRooms = true;
+                client.send(roomList());
+            }
+            case Ready m -> setReady(player, m.ready());
+            case Settings m -> changeSettings(player, m);
+            case Start m -> startGame(player);
+            case LeaveRoom m -> {
+                if (requireRoom(player, Protocol.LEAVE_ROOM) != null) {
+                    leaveRoom(player);
+                    client.send(new RoomLeft());
+                    publishRooms();
+                }
+            }
+            default -> throw new IllegalArgumentException("로비에서 처리할 수 없는 요청입니다.");
+        }
+    }
 
+    private static String commandOf(Request request) {
+        return switch (request) {
+            case Hello m -> Protocol.HELLO;
+            case Quit m -> Protocol.QUIT;
+            case CreateRoom m -> Protocol.CREATE_ROOM;
+            case JoinRoom m -> Protocol.JOIN_ROOM;
+            case ListRooms m -> Protocol.LIST_ROOMS;
+            case Ready m -> Protocol.READY;
+            case Settings m -> Protocol.SETTINGS;
+            case Start m -> Protocol.START;
+            case LeaveRoom m -> Protocol.LEAVE_ROOM;
+        };
+    }
+
+    private void register(ClientConnection client, String rawName) {
+        if (players.containsKey(client)) {
+            client.send(new HelloFailed(HelloFailReason.ALREADY_REGISTERED));
+            return;
+        }
         String nickname = rawName.strip();
         if (nickname.isEmpty()) {
-            client.send("HELLO_FAILED", "INVALID_NICKNAME");
+            client.send(new HelloFailed(HelloFailReason.INVALID_NICKNAME));
             return;
         }
-        // 이 검사와 등록은 한 로비 이벤트 안에서 실행되어 동시 접속에도 한 명만 성공한다.
-        if (tokensByName.containsKey(nickname)) {
-            client.send("HELLO_FAILED", "DUPLICATE_NICKNAME");
+        if (playersByName.containsKey(nickname)) {
+            client.send(new HelloFailed(HelloFailReason.DUPLICATE_NICKNAME));
             return;
         }
-
-        UUID token = UUID.randomUUID();
-        registeredNames.put(client, nickname);
-        tokensByName.put(nickname, token);
-        client.send("WELCOME", token.toString());
+        PlayerSession player = new PlayerSession(client, nickname);
+        players.put(client, player);
+        playersByName.put(nickname, player);
+        client.send(new Welcome(player.token.toString()));
         logConnection(nickname, "님이 접속했습니다.");
     }
 
+    private void createRoom(PlayerSession player, CreateRoom request) {
+        if (player.room != null) {
+            fail(player.connection, Protocol.CREATE_ROOM, RoomFailReason.ALREADY_IN_ROOM);
+            return;
+        }
+        if (!Room.validScore(request.targetScore())) {
+            fail(player.connection, Protocol.CREATE_ROOM, RoomFailReason.INVALID_SETTINGS);
+            return;
+        }
+        Room room = new Room(newCode(), player, request.targetScore(), request.isPublic());
+        rooms.put(room.code, room);
+        player.room = room;
+        room.broadcast();
+        publishRooms();
+    }
+
+    private String newCode() {
+        String code;
+        do {
+            StringBuilder builder = new StringBuilder(5);
+            for (int i = 0; i < 5; i++) {
+                builder.append(CODE_CHARACTERS.charAt(random.nextInt(CODE_CHARACTERS.length())));
+            }
+            code = builder.toString();
+        } while (rooms.containsKey(code));
+        return code;
+    }
+
+    private void joinRoom(PlayerSession player, String code) {
+        if (player.room != null) {
+            fail(player.connection, Protocol.JOIN_ROOM, RoomFailReason.ALREADY_IN_ROOM);
+            return;
+        }
+        Room room = rooms.get(code.strip().toUpperCase(Locale.ROOT));
+        if (room == null) {
+            fail(player.connection, Protocol.JOIN_ROOM, RoomFailReason.NOT_FOUND);
+            return;
+        }
+        if (room.started) {
+            fail(player.connection, Protocol.JOIN_ROOM, RoomFailReason.STARTED);
+            return;
+        }
+        if (room.guest != null) {
+            fail(player.connection, Protocol.JOIN_ROOM, RoomFailReason.FULL);
+            return;
+        }
+        // 마지막 자리 검사와 배정이 한 이벤트 안에서 끝난다.
+        room.guest = player;
+        room.guestReady = false;
+        player.room = room;
+        room.broadcast();
+        publishRooms();
+    }
+
+    private Room requireRoom(PlayerSession player, String command) {
+        if (player.room == null) {
+            fail(player.connection, command, RoomFailReason.NOT_IN_ROOM);
+        }
+        return player.room;
+    }
+
+    private Room requireWaitingRoom(PlayerSession player, String command) {
+        Room room = requireRoom(player, command);
+        if (room != null && room.started) {
+            fail(player.connection, command, RoomFailReason.STARTED);
+            return null;
+        }
+        return room;
+    }
+
+    private void setReady(PlayerSession player, boolean ready) {
+        Room room = requireWaitingRoom(player, Protocol.READY);
+        if (room == null) {
+            return;
+        }
+        if (room.host == player) {
+            fail(player.connection, Protocol.READY, RoomFailReason.GUEST_ONLY);
+            return;
+        }
+        room.guestReady = ready;
+        room.broadcast();
+    }
+
+    private void changeSettings(PlayerSession player, Settings request) {
+        Room room = requireWaitingRoom(player, Protocol.SETTINGS);
+        if (room == null) {
+            return;
+        }
+        if (room.host != player) {
+            fail(player.connection, Protocol.SETTINGS, RoomFailReason.HOST_ONLY);
+            return;
+        }
+        if (!Room.validScore(request.targetScore())) {
+            fail(player.connection, Protocol.SETTINGS, RoomFailReason.INVALID_SETTINGS);
+            return;
+        }
+        if (room.targetScore != request.targetScore() || room.isPublic != request.isPublic()) {
+            room.targetScore = request.targetScore();
+            room.isPublic = request.isPublic();
+            room.guestReady = false;
+        }
+        room.broadcast();
+        publishRooms();
+    }
+
+    private void startGame(PlayerSession player) {
+        Room room = requireWaitingRoom(player, Protocol.START);
+        if (room == null) {
+            return;
+        }
+        if (room.host != player) {
+            fail(player.connection, Protocol.START, RoomFailReason.HOST_ONLY);
+            return;
+        }
+        if (room.guest == null || !room.guestReady) {
+            fail(player.connection, Protocol.START, RoomFailReason.NOT_READY);
+            return;
+        }
+        room.started = true;
+        room.broadcast();
+        room.host.connection.send(new GameStart(room.code, 0, room.targetScore));
+        room.guest.connection.send(new GameStart(room.code, 1, room.targetScore));
+        publishRooms();
+    }
+
+    private void leaveRoom(PlayerSession player) {
+        Room room = player.room;
+        if (room == null) {
+            return;
+        }
+        player.room = null;
+        if (room.host == player) {
+            room.host = room.guest;
+        }
+        room.guest = null;
+        room.guestReady = false;
+        room.started = false;
+        if (room.host == null) {
+            rooms.remove(room.code);
+        } else {
+            room.broadcast();
+        }
+    }
+
+    private RoomList roomList() {
+        return new RoomList(rooms.values().stream()
+                .filter(room -> room.isPublic && !room.started)
+                .map(Room::summary).toList());
+    }
+
+    private void publishRooms() {
+        RoomList list = roomList();
+        for (PlayerSession player : players.values()) {
+            if (player.watchingRooms && player.room == null) {
+                player.connection.send(list);
+            }
+        }
+    }
+
+    private static void fail(ClientConnection client, String command, RoomFailReason reason) {
+        if (command.equals(Protocol.JOIN_ROOM)) {
+            client.send(new JoinFailed(reason));
+        } else {
+            client.send(new RoomFailed(command, reason));
+        }
+    }
+
     private void unregister(ClientConnection client) {
-        String nickname = registeredNames.remove(client);
-        if (nickname != null) {
-            tokensByName.remove(nickname);
-            logConnection(nickname, "님이 접속을 종료했습니다.");
+        PlayerSession player = players.remove(client);
+        if (player != null) {
+            leaveRoom(player);
+            playersByName.remove(player.nickname);
+            logConnection(player.nickname, "님이 접속을 종료했습니다.");
+            publishRooms();
         }
     }
 
     private void logConnection(String nickname, String message) {
-        // 닉네임에 줄바꿈이나 제어 문자가 있어도 터미널에는 한 줄로 표시한다.
         String displayName = nickname.replaceAll("[\\p{Cc}\\p{Zl}\\p{Zp}]", " ");
         System.out.println(displayName + message);
     }
