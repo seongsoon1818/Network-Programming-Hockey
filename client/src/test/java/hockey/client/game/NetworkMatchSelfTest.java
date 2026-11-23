@@ -28,6 +28,8 @@ public final class NetworkMatchSelfTest {
         finishedStateWaitsForGameOver();
         opponentLeaves();
         iLeave();
+        roomUpdateEndsGameWithoutGameOver();
+        abortStopsTheGame();
         System.out.println("NetworkMatchSelfTest: 모두 통과");
     }
 
@@ -81,7 +83,7 @@ public final class NetworkMatchSelfTest {
 
     private static void beforeFirstState() {
         NetworkMatch match = new NetworkMatch(0, "나", "상대", TARGET, new CountingLink());
-        check(match.overlay() == null && "상대를 기다리는 중".equals(match.overlayDetail()), "첫 상태 전 안내");
+        check("대기 중".equals(match.overlay()) && match.overlayDetail() != null, "첫 상태 전 안내(글씨가 있어야 화면에 뜬다)");
         check(match.score(0) == 0 && match.score(1) == 0 && match.hint() == null, "첫 상태 전 점수 0");
         check(match.name(0).equals("나") && match.name(1).equals("상대"), "이름");
         NetworkMatch top = new NetworkMatch(1, "나", "상대", TARGET, new CountingLink());
@@ -96,7 +98,7 @@ public final class NetworkMatchSelfTest {
         match.onState(engine.snapshot(), -1);
         check(match.overlay() == null && !match.isOver(), "GAME_OVER 전에는 승패 글씨 없음");
         match.onGameOver(0, 0, 0, true);
-        check("승리!".equals(match.overlay()) && "상대가 나갔습니다".equals(match.overlayDetail()), "기권승 글씨");
+        check("승리!".equals(match.overlay()) && "상대가 나갔습니다. 나가기를 누르면 대기실로 돌아갑니다".equals(match.overlayDetail()), "기권승 글씨");
     }
 
     private static void opponentLeaves() {
@@ -111,7 +113,7 @@ public final class NetworkMatchSelfTest {
             server.tick(tick);
         }
         check(match.isOver() && match.winner() == 1, "상대가 나가면 내가 이긴다");
-        check("승리!".equals(match.overlay()) && "상대가 나갔습니다".equals(match.overlayDetail()), "기권승 글씨");
+        check("승리!".equals(match.overlay()) && "상대가 나갔습니다. 나가기를 누르면 대기실로 돌아갑니다".equals(match.overlayDetail()), "기권승 글씨");
     }
 
     private static void iLeave() {
@@ -123,6 +125,39 @@ public final class NetworkMatchSelfTest {
         match.tick(3, 4);
         check(link.leaves == 1, "기권은 한 번만 보낸다");
         check(link.inputs == 1, "나간 뒤에는 입력을 보내지 않는다");
+    }
+
+    /** GAME_OVER 없이 방이 시작 전으로 돌아오면(지금 서버) 상대가 나갔으면 기권승, 아니면 승패 없이 끝낸다. */
+    private static void roomUpdateEndsGameWithoutGameOver() {
+        CountingLink link = new CountingLink();
+        NetworkMatch gone = new NetworkMatch(0, "나", "상대", TARGET, link);
+        gone.onRoomUpdate(true, true);
+        check(!gone.isFinished(), "시작한 방 상태는 경기를 끝내지 않는다");
+        gone.onRoomUpdate(false, false);
+        check(gone.isOver() && gone.winner() == 0 && "승리!".equals(gone.overlay()), "상대가 사라지면 기권승");
+
+        NetworkMatch stays = new NetworkMatch(1, "나", "상대", TARGET, link);
+        stays.onRoomUpdate(false, true);
+        check(stays.isFinished() && !stays.isOver() && "경기 종료".equals(stays.overlay()), "상대가 있으면 승패 없이 끝");
+
+        NetworkMatch done = new NetworkMatch(0, "나", "상대", TARGET, link);
+        done.onGameOver(1, 1, 3, false);
+        done.onRoomUpdate(false, false);
+        check(done.winner() == 1 && "패배".equals(done.overlay()), "GAME_OVER가 먼저 왔으면 그대로");
+    }
+
+    /** 연결이 끊기면 멈추고, 입력·기권을 보내지 않고, 늦게 온 상태·GAME_OVER도 무시한다. */
+    private static void abortStopsTheGame() {
+        CountingLink link = new CountingLink();
+        NetworkMatch match = new NetworkMatch(0, "나", "상대", TARGET, link);
+        match.tick(1, 2);
+        match.onAborted("연결 끊김", "접속 화면으로");
+        match.tick(3, 4);
+        match.leave();
+        match.onGameOver(0, 3, 0, false);
+        check(link.inputs == 1 && link.leaves == 0, "끝난 뒤에는 보내지 않는다");
+        check(match.isFinished() && !match.isOver() && "연결 끊김".equals(match.overlay())
+                && "접속 화면으로".equals(match.overlayDetail()) && match.hint() == null, "끊김 글씨");
     }
 
     private static final class CountingLink implements NetworkMatch.Link {

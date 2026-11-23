@@ -32,6 +32,9 @@ public final class NetworkMatch implements Match {
     private MatchSnapshot latest;
     private boolean over;
     private boolean left;
+    /** 승패 없이 끝남(연결 끊김 등). 화면에 띄울 글씨. */
+    private String abortedTitle;
+    private String abortedDetail;
     private int winner = -1;
     private boolean forfeit;
     private final int[] finalScore = new int[2];
@@ -47,7 +50,7 @@ public final class NetworkMatch implements Match {
 
     @Override
     public void tick(double targetX, double targetY) {
-        if (over || left) {
+        if (isFinished() || left) {
             return;
         }
         long seq = predictor.tick(targetX, targetY);
@@ -60,7 +63,7 @@ public final class NetworkMatch implements Match {
      * @param ackSeq 이 상태에 반영된 내 마지막 입력 번호. 아직 없으면 -1.
      */
     public void onState(MatchSnapshot snapshot, long ackSeq) {
-        if (over) {
+        if (isFinished()) {
             return;
         }
         predictor.onSnapshot(snapshot, ackSeq);
@@ -69,6 +72,9 @@ public final class NetworkMatch implements Match {
 
     /** 게임이 끝났다. 이후의 상태·입력은 무시한다. */
     public void onGameOver(int winner, int score0, int score1, boolean forfeit) {
+        if (isFinished()) {
+            return;
+        }
         over = true;
         this.winner = winner;
         this.forfeit = forfeit;
@@ -76,17 +82,47 @@ public final class NetworkMatch implements Match {
         finalScore[1] = score1;
     }
 
+    /**
+     * 방 상태를 받았다. 시작한 방이 시작 전 상태로 돌아왔는데 GAME_OVER가 없었다면 서버가 경기를 끝낸 것이다.
+     * 상대가 방에서 사라졌으면 기권승으로, 아니면 승패 없이 끝낸다. GAME_OVER가 먼저 왔으면 아무것도 하지 않는다.
+     */
+    public void onRoomUpdate(boolean started, boolean opponentInRoom) {
+        if (started || isFinished()) {
+            return;
+        }
+        if (opponentInRoom) {
+            onAborted("경기 종료", "나가기를 누르면 대기실로 돌아갑니다");
+        } else {
+            onGameOver(me, score(0), score(1), true);
+        }
+    }
+
+    /** 승패 없이 끝낸다(서버 연결이 끊김 등). 이후의 상태·입력은 무시한다. */
+    public void onAborted(String title, String detail) {
+        if (isFinished()) {
+            return;
+        }
+        abortedTitle = title;
+        abortedDetail = detail;
+    }
+
     /** 내가 나간다(기권). 한 번만 보낸다. 끝난 판이면 보내지 않는다. */
     public void leave() {
-        if (over || left) {
+        if (isFinished() || left) {
             return;
         }
         left = true;
         link.leaveGame();
     }
 
+    /** 승패가 정해졌는가(GAME_OVER를 받았는가). */
     public boolean isOver() {
         return over;
+    }
+
+    /** 더 진행하지 않는가. 승패가 정해졌거나 승패 없이 끝났으면 true. 나가기에 확인이 필요 없다. */
+    public boolean isFinished() {
+        return over || abortedTitle != null;
     }
 
     /** 이긴 플레이어. 끝나지 않았으면 -1. */
@@ -127,7 +163,13 @@ public final class NetworkMatch implements Match {
         if (over) {
             return winner == me ? "승리!" : "패배";
         }
-        if (latest == null || latest.phase() == Phase.FINISHED) {
+        if (abortedTitle != null) {
+            return abortedTitle;
+        }
+        if (latest == null) {
+            return "대기 중";
+        }
+        if (latest.phase() == Phase.FINISHED) {
             return null; // 승패(기권 포함)는 GAME_OVER가 알려 준다.
         }
         return MatchText.overlay(me, latest.phase(), latest.phaseTicksLeft(), latest.lastScorer(), -1);
@@ -136,17 +178,20 @@ public final class NetworkMatch implements Match {
     @Override
     public String overlayDetail() {
         if (over) {
-            return forfeit && winner == me ? "상대가 나갔습니다" : null;
+            return (forfeit && winner == me ? "상대가 나갔습니다. " : "") + "나가기를 누르면 대기실로 돌아갑니다";
+        }
+        if (abortedTitle != null) {
+            return abortedDetail;
         }
         if (latest == null) {
-            return "상대를 기다리는 중";
+            return "서버가 경기를 시작하기를 기다립니다";
         }
         return MatchText.serve(me, latest.phase(), latest.server());
     }
 
     @Override
     public String hint() {
-        if (over || latest == null) {
+        if (isFinished() || latest == null) {
             return null;
         }
         return MatchText.holdHint(me, latest.phase(), latest.holdSide(), latest.holdTicksLeft());

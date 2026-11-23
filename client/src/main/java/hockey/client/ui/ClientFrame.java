@@ -1,6 +1,7 @@
 package hockey.client.ui;
 
 import hockey.client.game.GamePanel;
+import hockey.client.game.NetworkMatch;
 import hockey.client.game.PracticeMatch;
 import hockey.client.model.RoomSettings;
 import hockey.client.model.RoomSummary;
@@ -8,8 +9,10 @@ import hockey.client.model.RoomView;
 import hockey.client.net.Connection;
 import hockey.common.protocol.Message.*;
 import hockey.common.protocol.Message.Reply;
+import hockey.common.rules.MatchSnapshot;
 
 import javax.swing.JFrame;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import java.awt.CardLayout;
@@ -48,6 +51,12 @@ public final class ClientFrame extends JFrame {
     /** 게임 화면에서 나갈 때 돌아갈 화면과 창 크기. */
     private String cardBeforeGame = CARD_CONNECT;
     private Dimension sizeBeforeGame;
+    /** 마지막으로 받은 방 상태. 게임을 시작할 때 상대 이름을 여기서 찾는다. 방 밖이면 null. */
+    private RoomView lastRoom;
+    /** 진행 중인 온라인 경기. 연습 중이거나 게임 화면이 아니면 null. */
+    private NetworkMatch onlineMatch;
+    /** 방 나가기를 요청했는가. 요청하지 않았는데 ROOM_LEFT가 오면 내보내진 것이다. */
+    private boolean leaveRequested;
 
     public ClientFrame() {
         super("네트워크 에어하키");
@@ -59,13 +68,19 @@ public final class ClientFrame extends JFrame {
         setMinimumSize(new Dimension(420, 340));
         setSize(680, 460);
         setLocationByPlatform(true);
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        // 온라인 경기 중에는 창을 닫기 전에 기권패를 확인한다.
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                if (!confirmForfeit("창을 닫으면 기권패가 됩니다.")) {
+                    return;
+                }
                 gamePanel.stop();
                 closeConnection();
                 requests.shutdownNow();
+                dispose();
+                System.exit(0);
             }
         });
     }
@@ -105,10 +120,26 @@ public final class ClientFrame extends JFrame {
                 RoomView view = new RoomView(m.code(), new RoomSettings(m.targetScore(), m.isPublic()),
                         m.members().stream().map(member -> new RoomView.Member(member.name(), member.host(), member.ready()))
                                 .toList(), source.session().nickname(), m.started());
+                lastRoom = view;
                 roomPanel.showRoom(view);
-                show(CARD_ROOM);
+                if (currentCard.equals(CARD_GAME)) {
+                    // 경기 화면은 그대로 두고, 나가면 대기실로 돌아가게만 한다.
+                    cardBeforeGame = CARD_ROOM;
+                    if (onlineMatch != null) {
+                        onlineMatch.onRoomUpdate(m.started(), view.members().size() > 1);
+                    }
+                } else {
+                    show(CARD_ROOM);
+                }
             }
             case RoomLeft m -> {
+                lastRoom = null;
+                boolean requested = leaveRequested;
+                leaveRequested = false;
+                if (!requested) {
+                    onKicked();
+                    return;
+                }
                 show(CARD_LOBBY);
                 lobbyPanel.showStatus("방에서 나왔습니다.", false);
                 sendRequest(new ListRooms());
@@ -118,8 +149,7 @@ public final class ClientFrame extends JFrame {
                 sendRequest(new ListRooms());
             }
             case RoomFailed m -> showRoomError(m.reason());
-            case GameStart m -> roomPanel.showStatus("시작 승인 완료 · " + (m.side() + 1)
-                    + "P · 온라인 경기 연결은 다음 단계에서 진행합니다.", false);
+            case GameStart m -> startOnlineGame(m);
             default -> { }
         }
     }
@@ -165,9 +195,14 @@ public final class ClientFrame extends JFrame {
             return;
         }
         connection = null;
+        lastRoom = null;
+        leaveRequested = false;
         if (currentCard.equals(CARD_GAME)) {
-            // 연습 중이면 판은 그대로 두고, 나갈 때 접속 화면으로 가게만 한다.
+            // 연습 판은 그대로 두고, 온라인 판은 멈춘다. 나가면 접속 화면으로 간다.
             cardBeforeGame = CARD_CONNECT;
+            if (onlineMatch != null) {
+                onlineMatch.onAborted("연결 끊김", "나가기를 누르면 접속 화면으로 돌아갑니다");
+            }
         } else {
             show(CARD_CONNECT);
         }
@@ -187,14 +222,68 @@ public final class ClientFrame extends JFrame {
         }
     }
 
-    /** 방장이 나를 내보냈을 때. 서버 메시지 형식이 정해지면 handleMessage에서 부른다. */
-    void onKicked() {
+    /** 방장이 나를 내보냈을 때. 내가 요청하지 않았는데 ROOM_LEFT가 오면 부른다. */
+    private void onKicked() {
         if (currentCard.equals(CARD_GAME)) {
             cardBeforeGame = CARD_LOBBY;
+            if (onlineMatch != null) {
+                onlineMatch.onAborted("경기 종료", "방에서 내보내졌습니다");
+            }
         } else {
             show(CARD_LOBBY);
         }
         lobbyPanel.showStatus("방장이 방에서 내보냈습니다.", true);
+        sendRequest(new ListRooms());
+    }
+
+    /** 서버가 경기 시작을 알렸다. 상대 이름은 직전에 받은 방 상태에서 찾는다. */
+    private void startOnlineGame(GameStart m) {
+        String myName = connection.session().nickname();
+        String opponent = "상대";
+        if (lastRoom != null) {
+            for (RoomView.Member member : lastRoom.members()) {
+                if (!member.name().equals(myName)) {
+                    opponent = member.name();
+                }
+            }
+        }
+        onlineMatch = new NetworkMatch(m.side(), myName, opponent, m.targetScore(), new ServerLink());
+        enterGame();
+        cardBeforeGame = CARD_ROOM;
+        gamePanel.start(onlineMatch, "온라인 경기 · " + m.targetScore() + "점 내기 · 방 " + m.code());
+    }
+
+    /** 서버 상태를 받았을 때. STATE 메시지 형식이 정해지면 handleMessage에서 부른다. */
+    void onGameState(MatchSnapshot snapshot, long ackSeq) {
+        if (onlineMatch != null) {
+            onlineMatch.onState(snapshot, ackSeq);
+        }
+    }
+
+    /** 경기가 끝났을 때. GAME_OVER 메시지 형식이 정해지면 handleMessage에서 부른다. */
+    void onGameOver(int winner, int score0, int score1, boolean forfeit) {
+        if (onlineMatch != null) {
+            onlineMatch.onGameOver(winner, score0, score1, forfeit);
+        }
+    }
+
+    /**
+     * 진행 중인 온라인 경기가 있으면 기권패를 확인한다.
+     *
+     * @return 나가도 되면 true. 나가기로 했으면 기권도 보낸다.
+     */
+    private boolean confirmForfeit(String message) {
+        if (onlineMatch == null || onlineMatch.isFinished()) {
+            return true;
+        }
+        Object[] options = {"나가기 (기권)", "계속하기"};
+        int choice = JOptionPane.showOptionDialog(this, message + "\n경기에서 나갈까요?", "경기 나가기",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[1]);
+        if (choice != 0) {
+            return false;
+        }
+        onlineMatch.leave();
+        return true;
     }
 
     private void startPractice() {
@@ -216,6 +305,10 @@ public final class ClientFrame extends JFrame {
     }
 
     private void exitGame() {
+        if (!confirmForfeit("지금 나가면 기권패가 됩니다.")) {
+            return;
+        }
+        onlineMatch = null;
         gamePanel.stop();
         if (sizeBeforeGame != null) {
             setSize(sizeBeforeGame);
@@ -285,7 +378,24 @@ public final class ClientFrame extends JFrame {
 
         @Override
         public void leaveRoom() {
+            leaveRequested = true;
             sendRequest(new LeaveRoom());
+        }
+    }
+
+    /**
+     * 온라인 경기에서 서버로 보내는 쪽. INPUT·LEAVE_GAME 메시지 형식이 정해지면 연결로 보낸다.
+     * 그 전까지는 보내지 않는다(서버도 아직 경기를 진행하지 않는다).
+     */
+    private final class ServerLink implements NetworkMatch.Link {
+        @Override
+        public void sendInput(long seq, double x, double y) {
+            // 형식 확정 뒤: 틱마다 보내므로 요청 큐(requests)를 거치지 않고 바로 보낸다.
+        }
+
+        @Override
+        public void leaveGame() {
+            // 형식 확정 뒤: sendRequest(new LeaveGame());
         }
     }
 }
