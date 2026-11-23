@@ -104,7 +104,7 @@ public final class PracticeMatchSelfTest {
         for (int i = 1; i < ServeRules.HOLD_LIMIT_TICKS; i++) {
             match.tick(homeX, homeY);
             check(match.phase() == MatchEngine.Phase.PLAYING, "10초 전에는 계속 진행: " + i);
-            boolean warn = ServeRules.HOLD_LIMIT_TICKS - i <= PracticeMatch.HOLD_WARNING_TICKS;
+            boolean warn = ServeRules.HOLD_LIMIT_TICKS - i <= MatchText.HOLD_WARNING_TICKS;
             check((match.hint() != null) == warn, "남은 5초부터 안내: " + i + " " + match.hint());
         }
         check("1초 안에 상대 진영으로 넘기세요".equals(match.hint()), "마지막 안내 문구: " + match.hint());
