@@ -135,6 +135,47 @@ public final class MatchEngine {
         enter(Phase.FINISHED, 0);
     }
 
+    /** 지금 상태를 담는다. 서버는 매 틱 이것을 상태 메시지로 보낸다. */
+    public MatchSnapshot snapshot() {
+        return new MatchSnapshot(ticks, phase, phaseTicks, server, lastScorer, score[0], score[1],
+                state.puckX, state.puckY, state.puckVx, state.puckVy,
+                state.malletX[0], state.malletY[0], state.malletX[1], state.malletY[1],
+                holdTimer.side(), holdTimer.remainingTicks());
+    }
+
+    /**
+     * 받은 상태로 맞춘다. 클라이언트 예측이 서버 상태에서 다시 계산할 때 쓴다. 이어서 같은 입력으로
+     * {@link #tick}을 부르면 서버와 같은 결과가 나온다.
+     *
+     * 기권 여부는 상태에 없어서 모른다. 끝난 상태면 목표 점수에 닿은 쪽을 승자로 둔다(기권이면 -1).
+     */
+    public void restore(MatchSnapshot s) {
+        ticks = s.tick();
+        phase = s.phase();
+        phaseTicks = s.phaseTicksLeft();
+        server = s.server();
+        lastScorer = s.lastScorer();
+        score[0] = s.score0();
+        score[1] = s.score1();
+        state.puckX = s.puckX();
+        state.puckY = s.puckY();
+        state.puckVx = s.puckVx();
+        state.puckVy = s.puckVy();
+        state.malletX[0] = s.mallet0X();
+        state.malletY[0] = s.mallet0Y();
+        state.malletX[1] = s.mallet1X();
+        state.malletY[1] = s.mallet1Y();
+        for (int i = 0; i < 2; i++) {
+            state.malletVx[i] = state.malletVy[i] = 0; // 다음 틱에 물리가 다시 계산한다.
+        }
+        holdTimer.restore(s.holdSide(), s.holdTicksLeft());
+        forfeited = false;
+        winner = phase != Phase.FINISHED ? -1
+                : score[0] >= targetScore ? 0
+                : score[1] >= targetScore ? 1
+                : -1;
+    }
+
     /** 퍽을 서브하는 쪽 진영에 놓고 단계를 바꾼다. */
     private void serve(int nextServer, Phase next, int pauseTicks) {
         server = nextServer;
