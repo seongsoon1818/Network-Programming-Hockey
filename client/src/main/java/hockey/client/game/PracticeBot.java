@@ -10,10 +10,10 @@ final class PracticeBot {
     private static final double SPEED = 650;
     /**
      * 퍽을 이만큼(틱) 늦게 본다. 사람은 보고 움직이기까지 시간이 걸리는데 봇은 매 틱 정확히 알아서,
-     * 지연이 없을 때는 최고 속도 슛도 93% 막았다(사실상 못 이김). 8틱(약 0.13초)이면 좋은 슛은
-     * 셋 중 하나 이상 들어가고 느린 슛은 여전히 막는다.
+     * 지연이 없을 때는 최고 속도 슛도 93% 막았다(사실상 못 이김). 8틱은 조금 쉬워서 6틱(0.1초)으로
+     * 줄였다. 좋은 슛은 여전히 셋 중 하나 이상 들어가고 느린 슛은 막는다.
      */
-    static final int REACTION_TICKS = 8;
+    static final int REACTION_TICKS = 6;
 
     private final int player;
     double targetX, targetY;
