@@ -72,7 +72,8 @@ public final class MessageCodec {
             case Protocol.JOIN_FAILED -> new JoinFailed(RoomFailReason.fromWire(in.readUTF()));
             case Protocol.ROOM_FAILED -> new RoomFailed(in.readUTF(), RoomFailReason.fromWire(in.readUTF()));
             case Protocol.GAME_START -> new GameStart(in.readUTF(), in.readInt(), in.readInt());
-            default -> new Unknown(command, in.readUTF());
+            // 모르는 명령은 필드 길이를 알 수 없어 뒤 메시지까지 어긋난다. 읽지 않고 연결을 끊게 한다.
+            default -> throw new ProtocolException("지원하지 않는 서버 명령: " + command);
         };
     }
 
@@ -124,10 +125,6 @@ public final class MessageCodec {
                 out.writeUTF(m.code());
                 out.writeInt(m.side());
                 out.writeInt(m.targetScore());
-            }
-            case Unknown m -> {
-                out.writeUTF(m.command());
-                out.writeUTF(m.value());
             }
         }
         out.flush();

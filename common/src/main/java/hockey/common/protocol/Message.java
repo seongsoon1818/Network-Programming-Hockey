@@ -65,9 +65,6 @@ public sealed interface Message {
 
     record HelloFailed(HelloFailReason reason) implements Reply {}
 
-    /** 이 버전이 모르는 서버 명령. 받은 쪽은 무시한다. */
-    record Unknown(String command, String value) implements Reply {}
-
     enum HelloFailReason {
         ALREADY_REGISTERED,
         INVALID_NICKNAME,

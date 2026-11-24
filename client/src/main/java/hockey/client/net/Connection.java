@@ -6,7 +6,6 @@ import hockey.common.protocol.Message.HelloFailed;
 import hockey.common.protocol.Message.Quit;
 import hockey.common.protocol.Message.Reply;
 import hockey.common.protocol.Message.Request;
-import hockey.common.protocol.Message.Unknown;
 import hockey.common.protocol.Message.Welcome;
 import hockey.common.protocol.MessageCodec;
 
@@ -112,10 +111,8 @@ public final class Connection implements Closeable {
     private void receiveLoop(Listener listener) {
         try {
             while (true) {
-                Reply message = MessageCodec.readReply(in);
-                if (!(message instanceof Unknown)) {
-                    listener.onMessage(message);
-                }
+                // 모르는 명령이면 readReply가 ProtocolException을 던져 연결 끊김으로 처리된다.
+                listener.onMessage(MessageCodec.readReply(in));
             }
         } catch (IOException e) {
             if (!closedByUs) {
