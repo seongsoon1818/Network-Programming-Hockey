@@ -15,11 +15,12 @@ import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
 /**
- * 초대 팝업. 남은 시간을 세다가 0이 되면 거절로 처리한다.
+ * 초대 팝업. 남은 시간을 세다가 0이 되면 응답 없이 닫는다. 시간 초과 판정은 서버가 하고
+ * INVITE_CANCELLED를 보낸다. 여기서 거절을 보내면 이미 끝난 초대라 NO_SUCH_INVITE가 돌아온다.
  * 모달이 아니다: 팝업이 떠 있는 동안에도 수신 메시지가 화면에 반영돼야 하기 때문이다.
  */
 final class InviteDialog extends JDialog {
-    /** 초대 만료 시간(제안서: 15초). 실제 만료 판정은 서버가 하고, 여기 숫자는 안내용이다. */
+    /** 초대 만료 시간(15초). 실제 시간은 INVITED에 담겨 오고, 이 값은 미리보기용이다. */
     static final int DEFAULT_SECONDS = 15;
 
     private final JLabel countdownLabel = new JLabel();
@@ -29,7 +30,7 @@ final class InviteDialog extends JDialog {
     private boolean answered;
 
     /**
-     * @param onAnswer 수락이면 true, 거절·만료·창 닫기면 false. 한 번만 불린다.
+     * @param onAnswer 수락이면 true, 거절·창 닫기면 false. 시간이 다 되면 부르지 않는다. 많아야 한 번 불린다.
      */
     static InviteDialog show(Component parent, String fromName, int seconds, Consumer<Boolean> onAnswer) {
         InviteDialog dialog = new InviteDialog(parent, fromName, seconds, onAnswer);
@@ -74,14 +75,14 @@ final class InviteDialog extends JDialog {
     private void onSecond() {
         secondsLeft--;
         if (secondsLeft <= 0) {
-            answer(false);
+            cancel();
         } else {
             updateCountdown();
         }
     }
 
     private void updateCountdown() {
-        countdownLabel.setText(secondsLeft + "초 안에 응답하지 않으면 자동으로 거절됩니다.");
+        countdownLabel.setText(secondsLeft + "초 안에 응답하지 않으면 초대가 취소됩니다.");
     }
 
     private void answer(boolean accepted) {
