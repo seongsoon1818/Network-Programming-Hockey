@@ -1,6 +1,7 @@
 package hockey.client.ui;
 
 import hockey.client.game.GamePanel;
+import hockey.client.game.NetworkMatch;
 import hockey.client.game.PracticeMatch;
 import hockey.client.model.RoomSettings;
 import hockey.client.model.RoomSummary;
@@ -233,6 +234,32 @@ public final class UiPreview {
             game.stop();
         }
         saveServePngs(dir);
+        saveOnlinePngs(dir);
+    }
+
+    /** 온라인 판 글씨: 서버 상태를 기다리는 중, 상대가 나가 이김, 연결 끊김. 서버 없이 만든다. */
+    private static void saveOnlinePngs(File dir) {
+        NetworkMatch.Link none = new NetworkMatch.Link() {
+            @Override public void sendInput(long seq, double x, double y) {}
+            @Override public void leaveGame() {}
+        };
+        String title = "온라인 경기 · 5점 내기 · 방 AB12";
+        GamePanel game = new GamePanel(() -> {});
+
+        NetworkMatch waiting = new NetworkMatch(0, "chan", "상대", 5, none);
+        game.start(waiting, title);
+        save(game, 520, 860, new File(dir, "online-waiting.png"));
+
+        NetworkMatch won = new NetworkMatch(0, "chan", "상대", 5, none);
+        won.onGameOver(0, 2, 1, true);
+        game.start(won, title);
+        save(game, 520, 860, new File(dir, "online-forfeit-win.png"));
+
+        NetworkMatch lost = new NetworkMatch(1, "chan", "상대", 5, none);
+        lost.onAborted("연결 끊김", "나가기를 누르면 접속 화면으로 돌아갑니다");
+        game.start(lost, title);
+        save(game, 520, 860, new File(dir, "online-disconnected.png"));
+        game.stop();
     }
 
     /** 서브 장면: 시작 카운트다운과, 내 서브를 붙잡고 있을 때 뜨는 경고. */

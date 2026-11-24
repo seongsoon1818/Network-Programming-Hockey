@@ -1,18 +1,21 @@
 package hockey.client.game;
 
 import hockey.common.physics.GameState;
-import hockey.common.physics.Physics;
+import hockey.common.rules.MatchEngine;
+import hockey.common.rules.MatchSnapshot;
+
+import java.util.Random;
 
 /**
  * 클라이언트 예측·보정.
  *
  * 서버 상태는 지연 때문에 늘 과거의 것이다. 그래서 클라이언트는 자기 입력을 보내는 동시에
- * 같은 {@link Physics}로 먼저 계산해 그리고(예측), 서버 상태가 오면 그 상태에서 아직 서버가
- * 처리하지 않은 내 입력만 다시 돌려 맞춘다(보정). 보정으로 생긴 위치 차이는 한 번에 옮기지 않고
- * 몇 프레임에 걸쳐 줄인다.
+ * 서버와 같은 {@link MatchEngine}으로 먼저 계산해 그리고(예측), 서버 상태가 오면 그 상태에서 아직 서버가
+ * 처리하지 않은 내 입력만 다시 돌려 맞춘다(보정). 경기 규칙까지 같은 코드로 돌리므로 골·카운트다운 동안
+ * 퍽이 서브 자리에 멈추는 것도 서버와 같다. 보정으로 생긴 위치 차이는 한 번에 옮기지 않고 몇 프레임에 걸쳐 줄인다.
  *
  * 프로토콜과는 분리돼 있다. 필요한 것은 "서버 상태"와 "그 상태에 반영된 내 마지막 입력 번호"뿐이다.
- * 메시지 형식이 정해지면 수신부에서 {@link #onSnapshot}만 부르면 된다. 모든 메서드는 EDT에서 부른다.
+ * 모든 메서드는 EDT에서 부른다.
  */
 public final class Predictor {
     /** 다시 돌릴 수 있는 입력 개수(틱). 256틱 ≈ 4.3초 지연까지. */
@@ -23,7 +26,7 @@ public final class Predictor {
     private static final double ERROR_DECAY = 0.8;
 
     private final int me;
-    private final GameState predicted = new GameState();
+    private final MatchEngine predicted;
     private final GameState view = new GameState();
     private final double[] inputX = new double[HISTORY];
     private final double[] inputY = new double[HISTORY];
@@ -32,10 +35,12 @@ public final class Predictor {
     // 화면에만 더하는 오차(예측 위치 → 직전까지 그리던 위치)
     private double puckErrX, puckErrY, opponentErrX, opponentErrY;
 
-    public Predictor(int me) {
+    public Predictor(int me, int targetScore) {
         this.me = me;
-        opponentX = predicted.malletX[1 - me];
-        opponentY = predicted.malletY[1 - me];
+        // 첫 서브를 정하는 난수는 의미 없다. 첫 서버 상태가 오면 통째로 덮어쓴다.
+        this.predicted = new MatchEngine(targetScore, new Random(0));
+        opponentX = state().malletX[1 - me];
+        opponentY = state().malletY[1 - me];
     }
 
     /**
@@ -60,54 +65,57 @@ public final class Predictor {
      *
      * @param ackSeq 서버 상태에 반영된 내 마지막 입력 번호. 아직 하나도 반영되지 않았으면 -1.
      */
-    public void onSnapshot(GameState server, long ackSeq) {
+    public void onSnapshot(MatchSnapshot server, long ackSeq) {
         int opp = 1 - me;
-        double shownPuckX = predicted.puckX + puckErrX;
-        double shownPuckY = predicted.puckY + puckErrY;
-        double shownOppX = predicted.malletX[opp] + opponentErrX;
-        double shownOppY = predicted.malletY[opp] + opponentErrY;
+        GameState s = state();
+        double shownPuckX = s.puckX + puckErrX;
+        double shownPuckY = s.puckY + puckErrY;
+        double shownOppX = s.malletX[opp] + opponentErrX;
+        double shownOppY = s.malletY[opp] + opponentErrY;
 
-        predicted.copyFrom(server);
+        predicted.restore(server);
         // 상대 입력은 알 수 없으므로 마지막으로 본 자리에 머문다고 가정한다.
-        opponentX = server.malletX[opp];
-        opponentY = server.malletY[opp];
+        opponentX = s.malletX[opp];
+        opponentY = s.malletY[opp];
         long from = Math.max(Math.max(ackSeq + 1, 0), nextSeq - HISTORY);
         for (long seq = from; seq < nextSeq; seq++) {
             int i = (int) (seq % HISTORY);
             step(inputX[i], inputY[i]);
         }
 
-        puckErrX = shownPuckX - predicted.puckX;
-        puckErrY = shownPuckY - predicted.puckY;
+        puckErrX = shownPuckX - s.puckX;
+        puckErrY = shownPuckY - s.puckY;
         if (Math.hypot(puckErrX, puckErrY) > SNAP_DISTANCE) {
             puckErrX = puckErrY = 0;
         }
-        opponentErrX = shownOppX - predicted.malletX[opp];
-        opponentErrY = shownOppY - predicted.malletY[opp];
+        opponentErrX = shownOppX - s.malletX[opp];
+        opponentErrY = shownOppY - s.malletY[opp];
         if (Math.hypot(opponentErrX, opponentErrY) > SNAP_DISTANCE) {
             opponentErrX = opponentErrY = 0;
         }
     }
 
     private void step(double targetX, double targetY) {
-        int events = me == 0
-                ? Physics.step(predicted, targetX, targetY, opponentX, opponentY)
-                : Physics.step(predicted, opponentX, opponentY, targetX, targetY);
-        if ((events & Physics.EVENT_GOAL_MASK) != 0) {
-            // 임시 규칙: 골이면 퍽을 가운데로. 골 뒤 진행(정지·카운트다운)은 서버 규칙이 정해지면 맞춘다.
-            predicted.resetPuck();
+        if (me == 0) {
+            predicted.tick(targetX, targetY, opponentX, opponentY);
+        } else {
+            predicted.tick(opponentX, opponentY, targetX, targetY);
         }
+    }
+
+    private GameState state() {
+        return predicted.state();
     }
 
     /** 보정 오차를 뺀 예측 상태(테스트·디버그용). */
     public GameState predicted() {
-        return predicted;
+        return state();
     }
 
     /** 화면에 그릴 상태. 퍽과 상대 말렛에 남은 보정 오차를 더한 것. */
     public GameState view() {
         int opp = 1 - me;
-        view.copyFrom(predicted);
+        view.copyFrom(state());
         view.puckX += puckErrX;
         view.puckY += puckErrY;
         view.malletX[opp] += opponentErrX;

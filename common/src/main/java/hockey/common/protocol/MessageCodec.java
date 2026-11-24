@@ -1,6 +1,8 @@
 package hockey.common.protocol;
 
 import hockey.common.protocol.Message.*;
+import hockey.common.rules.MatchEngine.Phase;
+import hockey.common.rules.MatchSnapshot;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -41,6 +43,26 @@ public final class MessageCodec {
             }
             case Start m -> out.writeUTF(Protocol.START);
             case LeaveRoom m -> out.writeUTF(Protocol.LEAVE_ROOM);
+            case Kick m -> {
+                out.writeUTF(Protocol.KICK);
+                out.writeUTF(m.name());
+            }
+            case Invite m -> {
+                out.writeUTF(Protocol.INVITE);
+                out.writeUTF(m.name());
+            }
+            case InviteReply m -> {
+                out.writeUTF(Protocol.INVITE_REPLY);
+                out.writeUTF(m.inviter());
+                out.writeBoolean(m.accept());
+            }
+            case Input m -> {
+                out.writeUTF(Protocol.INPUT);
+                out.writeInt(m.seq());
+                out.writeDouble(m.x());
+                out.writeDouble(m.y());
+            }
+            case LeaveGame m -> out.writeUTF(Protocol.LEAVE_GAME);
         }
         out.flush();
     }
@@ -57,6 +79,11 @@ public final class MessageCodec {
             case Protocol.SETTINGS -> new Settings(in.readInt(), in.readBoolean());
             case Protocol.START -> new Start();
             case Protocol.LEAVE_ROOM -> new LeaveRoom();
+            case Protocol.KICK -> new Kick(in.readUTF());
+            case Protocol.INVITE -> new Invite(in.readUTF());
+            case Protocol.INVITE_REPLY -> new InviteReply(in.readUTF(), in.readBoolean());
+            case Protocol.INPUT -> new Input(in.readInt(), in.readDouble(), in.readDouble());
+            case Protocol.LEAVE_GAME -> new LeaveGame();
             default -> throw new ProtocolException("지원하지 않는 명령: " + command);
         };
     }
@@ -72,7 +99,15 @@ public final class MessageCodec {
             case Protocol.JOIN_FAILED -> new JoinFailed(RoomFailReason.fromWire(in.readUTF()));
             case Protocol.ROOM_FAILED -> new RoomFailed(in.readUTF(), RoomFailReason.fromWire(in.readUTF()));
             case Protocol.GAME_START -> new GameStart(in.readUTF(), in.readInt(), in.readInt());
-            default -> new Unknown(command, in.readUTF());
+            case Protocol.USER_LIST -> readUsers(in);
+            case Protocol.INVITED -> new Invited(in.readUTF(), in.readInt());
+            case Protocol.INVITE_RESULT -> new InviteResult(in.readUTF(), InviteOutcome.fromWire(in.readUTF()));
+            case Protocol.INVITE_CANCELLED -> new InviteCancelled(in.readUTF());
+            case Protocol.STATE -> readState(in);
+            case Protocol.GAME_OVER -> new GameOver(in.readInt(), in.readInt(), in.readInt(),
+                    GameOverReason.fromWire(in.readUTF()));
+            // 모르는 명령은 필드 길이를 알 수 없어 뒤 메시지까지 어긋난다. 읽지 않고 연결을 끊게 한다.
+            default -> throw new ProtocolException("지원하지 않는 서버 명령: " + command);
         };
     }
 
@@ -125,12 +160,88 @@ public final class MessageCodec {
                 out.writeInt(m.side());
                 out.writeInt(m.targetScore());
             }
-            case Unknown m -> {
-                out.writeUTF(m.command());
-                out.writeUTF(m.value());
+            case UserList m -> {
+                out.writeUTF(Protocol.USER_LIST);
+                out.writeInt(m.names().size());
+                for (String name : m.names()) {
+                    out.writeUTF(name);
+                }
+            }
+            case Invited m -> {
+                out.writeUTF(Protocol.INVITED);
+                out.writeUTF(m.inviter());
+                out.writeInt(m.secondsLeft());
+            }
+            case InviteResult m -> {
+                out.writeUTF(Protocol.INVITE_RESULT);
+                out.writeUTF(m.name());
+                out.writeUTF(m.outcome().name());
+            }
+            case InviteCancelled m -> {
+                out.writeUTF(Protocol.INVITE_CANCELLED);
+                out.writeUTF(m.inviter());
+            }
+            case State m -> writeState(out, m);
+            case GameOver m -> {
+                out.writeUTF(Protocol.GAME_OVER);
+                out.writeInt(m.winner());
+                out.writeInt(m.score0());
+                out.writeInt(m.score1());
+                out.writeUTF(m.reason().name());
             }
         }
         out.flush();
+    }
+
+    /** STATE 18개 필드. 순서는 형식 문서의 'STATE 필드' 시트와 같다. */
+    private static void writeState(DataOutputStream out, State m) throws IOException {
+        MatchSnapshot s = m.snapshot();
+        out.writeUTF(Protocol.STATE);
+        out.writeInt(s.tick());
+        out.writeInt(m.ackSeq());
+        out.writeUTF(s.phase().name());
+        out.writeInt(s.phaseTicksLeft());
+        out.writeInt(s.server());
+        out.writeInt(s.lastScorer());
+        out.writeInt(s.score0());
+        out.writeInt(s.score1());
+        out.writeDouble(s.puckX());
+        out.writeDouble(s.puckY());
+        out.writeDouble(s.puckVx());
+        out.writeDouble(s.puckVy());
+        out.writeDouble(s.mallet0X());
+        out.writeDouble(s.mallet0Y());
+        out.writeDouble(s.mallet1X());
+        out.writeDouble(s.mallet1Y());
+        out.writeInt(s.holdSide());
+        out.writeInt(s.holdTicksLeft());
+    }
+
+    private static State readState(DataInputStream in) throws IOException {
+        int tick = in.readInt();
+        int ackSeq = in.readInt();
+        String phaseName = in.readUTF();
+        Phase phase;
+        try {
+            phase = Phase.valueOf(phaseName);
+        } catch (IllegalArgumentException e) {
+            throw new ProtocolException("모르는 경기 단계: " + phaseName);
+        }
+        MatchSnapshot snapshot = new MatchSnapshot(tick, phase, in.readInt(), in.readInt(), in.readInt(),
+                in.readInt(), in.readInt(),
+                in.readDouble(), in.readDouble(), in.readDouble(), in.readDouble(),
+                in.readDouble(), in.readDouble(), in.readDouble(), in.readDouble(),
+                in.readInt(), in.readInt());
+        return new State(ackSeq, snapshot);
+    }
+
+    private static UserList readUsers(DataInputStream in) throws IOException {
+        int count = readCount(in);
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            names.add(in.readUTF());
+        }
+        return new UserList(names);
     }
 
     private static RoomUpdate readRoom(DataInputStream in) throws IOException {

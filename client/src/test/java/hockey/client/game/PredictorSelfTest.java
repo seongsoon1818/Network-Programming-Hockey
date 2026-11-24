@@ -1,7 +1,8 @@
 package hockey.client.game;
 
 import hockey.common.physics.GameState;
-import hockey.common.physics.Physics;
+import hockey.common.rules.MatchEngine;
+import hockey.common.rules.MatchSnapshot;
 
 import java.util.ArrayDeque;
 import java.util.Random;
@@ -10,6 +11,7 @@ import static hockey.common.physics.PhysicsConstants.*;
 
 /**
  * 예측·보정을 가짜 서버와 지연을 넣어 확인한다(소켓 없이 틱 단위로 흉내 낸다).
+ * 가짜 서버는 진짜 서버처럼 {@link MatchEngine}으로 경기 규칙(카운트다운, 골 뒤 멈춤, 10초 제한)까지 돌린다.
  *
  * 비교 기준: 클라이언트가 입력 n까지 예측한 상태 ↔ 서버가 입력 n까지 처리한 뒤의 실제 상태.
  * 상대가 가만히 있으면 둘은 같아야 하고(같은 Physics, 같은 입력), 상대가 움직이면
@@ -46,7 +48,7 @@ public final class PredictorSelfTest {
 
     private record Result(double maxPuckError, double meanPuckError, double meanStaleError, double maxVisualError) {}
 
-    private record Snapshot(int arriveTick, GameState state, long ackSeq) {}
+    private record Snapshot(int arriveTick, MatchSnapshot state, long ackSeq) {}
 
     /**
      * @param latency       한 방향 지연(틱)
@@ -54,8 +56,9 @@ public final class PredictorSelfTest {
      */
     private static Result run(int me, int latency, int snapshotEvery, boolean opponentMoves, long seed) {
         Random random = new Random(seed);
-        GameState server = new GameState();
-        Predictor predictor = new Predictor(me);
+        MatchEngine engine = new MatchEngine(99, new Random(seed));
+        GameState server = engine.state();
+        Predictor predictor = new Predictor(me, 99);
         ArrayDeque<Snapshot> inFlight = new ArrayDeque<>();
         GameState lastReceived = new GameState();
 
@@ -80,7 +83,8 @@ public final class PredictorSelfTest {
             while (!inFlight.isEmpty() && inFlight.peek().arriveTick() <= tick) {
                 Snapshot snapshot = inFlight.poll();
                 predictor.onSnapshot(snapshot.state(), snapshot.ackSeq());
-                lastReceived.copyFrom(snapshot.state());
+                lastReceived.puckX = snapshot.state().puckX();
+                lastReceived.puckY = snapshot.state().puckY();
             }
             if (tick % 15 == 0) {
                 // 사람 흉내: 0.25초마다 퍽 근처 또는 임의 위치를 겨눈다.
@@ -108,11 +112,10 @@ public final class PredictorSelfTest {
             int arrived = tick - latency;
             double sx = arrived >= 0 ? inputX[arrived] : server.malletX[me];
             double sy = arrived >= 0 ? inputY[arrived] : server.malletY[me];
-            int events = me == 0
-                    ? Physics.step(server, sx, sy, oppX, oppY)
-                    : Physics.step(server, oppX, oppY, sx, sy);
-            if ((events & Physics.EVENT_GOAL_MASK) != 0) {
-                server.resetPuck();
+            if (me == 0) {
+                engine.tick(sx, sy, oppX, oppY);
+            } else {
+                engine.tick(oppX, oppY, sx, sy);
             }
             if (arrived >= 0) {
                 truthX[arrived] = server.puckX;
@@ -120,9 +123,7 @@ public final class PredictorSelfTest {
                 truthKnown[arrived] = true;
             }
             if (tick % snapshotEvery == 0) {
-                GameState copy = new GameState();
-                copy.copyFrom(server);
-                inFlight.add(new Snapshot(tick + 1 + latency, copy, Math.max(arrived, -1)));
+                inFlight.add(new Snapshot(tick + 1 + latency, engine.snapshot(), Math.max(arrived, -1)));
             }
         }
 

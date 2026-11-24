@@ -78,6 +78,15 @@ public final class ServeRules {
             return -1;
         }
 
+        /** {@link #side()}와 {@link #remainingTicks()}로 읽은 값으로 되돌린다(서버 상태를 받은 클라이언트). */
+        public void restore(int side, int remainingTicks) {
+            if (side < -1 || side > 1 || remainingTicks < 1 || remainingTicks > HOLD_LIMIT_TICKS) {
+                throw new IllegalArgumentException("잘못된 값: " + side + ", " + remainingTicks);
+            }
+            this.side = side;
+            this.ticks = side == -1 ? 0 : HOLD_LIMIT_TICKS - remainingTicks;
+        }
+
         /** 지금 퍽이 머무는 진영. 아직 모르면 -1. */
         public int side() {
             return side;

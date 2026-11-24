@@ -22,6 +22,7 @@ public final class MatchEngineSelfTest {
         firstServeIsRandom();
         sameSeedSameGame();
         restartResets();
+        snapshotRestoreContinuesTheSameGame();
         System.out.println("MatchEngineSelfTest: 모두 통과");
     }
 
@@ -182,6 +183,47 @@ public final class MatchEngineSelfTest {
         check(m.score(0) == 0 && m.score(1) == 0 && m.lastScorer() == -1, "점수 초기화");
         check(m.winner() == -1 && !m.forfeited() && m.ticks() == 0, "승자·틱 초기화");
         check(ServeRules.sideOf(m.state().puckY) == m.server(), "퍽은 새 서브 쪽 진영");
+    }
+
+    /**
+     * 상태를 담아 다른 엔진에 되돌리면, 같은 입력으로 계속 돌렸을 때 원래 엔진과 똑같이 진행한다.
+     * 클라이언트 예측이 서버 상태에서 다시 계산할 때 기대는 성질이다. 모든 단계를 거치는지도 센다.
+     */
+    private static void snapshotRestoreContinuesTheSameGame() {
+        MatchEngine a = new MatchEngine(99, new Random(5));
+        MatchEngine b = new MatchEngine(99, new Random(6));
+        Random inputs = new Random(7);
+        boolean[] seen = new boolean[Phase.values().length];
+        for (int t = 0; t < 120 * TICK_RATE; t++) {
+            if (t % 37 == 0) {
+                b.restore(a.snapshot());
+                check(b.snapshot().equals(a.snapshot()), "되돌린 직후 같은 상태 (tick " + t + ")");
+            }
+            // 가끔은 퍽을 쫓아 골·시간 초과가 나게 한다.
+            boolean chase = t % 120 < 60;
+            double x0 = chase ? a.state().puckX : inputs.nextDouble() * FIELD_WIDTH;
+            double y0 = chase ? a.state().puckY + 30 : inputs.nextDouble() * FIELD_HEIGHT;
+            double x1 = inputs.nextDouble() * FIELD_WIDTH, y1 = inputs.nextDouble() * FIELD_HEIGHT;
+            int ea = a.tick(x0, y0, x1, y1);
+            int eb = b.tick(x0, y0, x1, y1);
+            check(ea == eb && a.snapshot().equals(b.snapshot()), "되돌린 뒤 같은 진행 (tick " + t + ")");
+            seen[a.phase().ordinal()] = true;
+        }
+        check(seen[Phase.COUNTDOWN.ordinal()] && seen[Phase.PLAYING.ordinal()] && seen[Phase.GOAL.ordinal()]
+                && seen[Phase.HOLD_TIMEOUT.ordinal()], "카운트다운·경기·골·시간 초과를 모두 거침");
+
+        // 끝난 상태도 되돌릴 수 있고, 목표 점수로 승자를 안다.
+        MatchEngine done = serverIs(0, 1);
+        skipCountdown(done);
+        done.state().puckX = FIELD_WIDTH / 2;
+        done.state().puckY = 80;
+        done.state().puckVy = -1500;
+        for (int i = 0; i < 60 && done.phase() == Phase.PLAYING; i++) {
+            done.tick(0, FIELD_HEIGHT, FIELD_WIDTH, 0);
+        }
+        MatchEngine copy = new MatchEngine(1, new Random(0));
+        copy.restore(done.snapshot());
+        check(copy.phase() == Phase.FINISHED && copy.winner() == 0, "끝난 상태 되돌리기");
     }
 
     private static void check(boolean condition, String message) {

@@ -21,6 +21,11 @@ public final class Protocol {
     public static final String SETTINGS = "SETTINGS";
     public static final String START = "START";
     public static final String LEAVE_ROOM = "LEAVE_ROOM";
+    public static final String KICK = "KICK";
+    public static final String INVITE = "INVITE";
+    public static final String INVITE_REPLY = "INVITE_REPLY";
+    public static final String INPUT = "INPUT";
+    public static final String LEAVE_GAME = "LEAVE_GAME";
 
     // S→C
     public static final String WELCOME = "WELCOME";
@@ -31,4 +36,10 @@ public final class Protocol {
     public static final String JOIN_FAILED = "JOIN_FAILED";
     public static final String ROOM_FAILED = "ROOM_FAILED";
     public static final String GAME_START = "GAME_START";
+    public static final String USER_LIST = "USER_LIST";
+    public static final String INVITED = "INVITED";
+    public static final String INVITE_RESULT = "INVITE_RESULT";
+    public static final String INVITE_CANCELLED = "INVITE_CANCELLED";
+    public static final String STATE = "STATE";
+    public static final String GAME_OVER = "GAME_OVER";
 }
