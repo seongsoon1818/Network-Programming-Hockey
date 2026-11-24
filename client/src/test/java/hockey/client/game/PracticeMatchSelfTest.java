@@ -1,6 +1,7 @@
 package hockey.client.game;
 
 import hockey.common.physics.GameState;
+import hockey.common.rules.MatchEngine;
 import hockey.common.rules.ServeRules;
 
 import java.util.Random;
@@ -23,7 +24,7 @@ public final class PracticeMatchSelfTest {
 
     private static void countdownHoldsPuck(int me, int server) {
         PracticeMatch match = serverIs(me, server);
-        check(match.phase() == PracticeMatch.Phase.COUNTDOWN, "시작은 카운트다운");
+        check(match.phase() == MatchEngine.Phase.COUNTDOWN, "시작은 카운트다운");
         check("3".equals(match.overlay()), "카운트다운은 3부터");
         check((match.server() == me ? "내 서브" : "상대 서브").equals(match.overlayDetail()), "서브하는 쪽 표시");
         double serveX = match.state().puckX;
@@ -39,7 +40,7 @@ public final class PracticeMatchSelfTest {
         }
         check("1".equals(match.overlay()), "마지막 1초 표시");
         match.tick(serveX, serveY);
-        check(match.phase() == PracticeMatch.Phase.PLAYING && match.overlay() == null, "카운트다운 뒤 진행");
+        check(match.phase() == MatchEngine.Phase.PLAYING && match.overlay() == null, "카운트다운 뒤 진행");
     }
 
     private static void playsToTheEnd(int me, int server) {
@@ -50,7 +51,7 @@ public final class PracticeMatchSelfTest {
         int ticks = 0;
         int limit = 60 * TICK_RATE * 30;
         int goals = 0;
-        while (match.phase() != PracticeMatch.Phase.FINISHED && ticks < limit) {
+        while (match.phase() != MatchEngine.Phase.FINISHED && ticks < limit) {
             // 사람 흉내: 가끔 퍽 쪽으로, 가끔 아무 데나.
             if (ticks % 20 == 0) {
                 GameState s = match.state();
@@ -72,7 +73,7 @@ public final class PracticeMatchSelfTest {
             check(s.puckX >= 0 && s.puckX <= FIELD_WIDTH, "퍽 x 범위");
             check(match.score(0) <= target && match.score(1) <= target, "점수는 목표를 넘지 않음");
         }
-        check(match.phase() == PracticeMatch.Phase.FINISHED, "30분 안에 판이 끝남(me=" + me + ")");
+        check(match.phase() == MatchEngine.Phase.FINISHED, "30분 안에 판이 끝남(me=" + me + ")");
         int winner = match.score(0) == target ? 0 : 1;
         check(match.score(winner) == target && match.score(1 - winner) < target, "한쪽만 목표 점수");
         check((winner == me ? "승리!" : "패배").equals(match.overlay()), "결과 표시");
@@ -84,7 +85,7 @@ public final class PracticeMatchSelfTest {
         match.tick(0, 0);
         check(frozenX == match.state().malletX[me], "끝난 판은 진행하지 않음");
         match.onClick();
-        check(match.phase() == PracticeMatch.Phase.COUNTDOWN && match.score(0) == 0 && match.score(1) == 0,
+        check(match.phase() == MatchEngine.Phase.COUNTDOWN && match.score(0) == 0 && match.score(1) == 0,
                 "클릭하면 다시 시작");
     }
 
@@ -95,20 +96,20 @@ public final class PracticeMatchSelfTest {
         double homeX = MALLET_RADIUS;
         double homeY = me == 0 ? FIELD_HEIGHT - MALLET_RADIUS : MALLET_RADIUS;
         int countdown = 0;
-        while (match.phase() == PracticeMatch.Phase.COUNTDOWN) {
+        while (match.phase() == MatchEngine.Phase.COUNTDOWN) {
             match.tick(homeX, homeY);
             countdown++;
         }
         check(countdown == 3 * TICK_RATE, "카운트다운 3초");
         for (int i = 1; i < ServeRules.HOLD_LIMIT_TICKS; i++) {
             match.tick(homeX, homeY);
-            check(match.phase() == PracticeMatch.Phase.PLAYING, "10초 전에는 계속 진행: " + i);
+            check(match.phase() == MatchEngine.Phase.PLAYING, "10초 전에는 계속 진행: " + i);
             boolean warn = ServeRules.HOLD_LIMIT_TICKS - i <= PracticeMatch.HOLD_WARNING_TICKS;
             check((match.hint() != null) == warn, "남은 5초부터 안내: " + i + " " + match.hint());
         }
         check("1초 안에 상대 진영으로 넘기세요".equals(match.hint()), "마지막 안내 문구: " + match.hint());
         match.tick(homeX, homeY);
-        check(match.phase() == PracticeMatch.Phase.HOLD_TIMEOUT, "10초가 되면 시간 초과");
+        check(match.phase() == MatchEngine.Phase.HOLD_TIMEOUT, "10초가 되면 시간 초과");
         check("시간 초과".equals(match.overlay()) && "상대 서브".equals(match.overlayDetail()), "시간 초과 표시");
         check(match.server() == 1 - me, "서브권이 상대에게");
         check(ServeRules.sideOf(match.state().puckY) == 1 - me, "퍽은 상대 진영에 놓임");
