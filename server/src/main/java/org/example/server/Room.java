@@ -17,7 +17,11 @@ final class Room {
     int targetScore;
     boolean isPublic;
     boolean guestReady;
-    boolean started;
+    GameRoom game;
+
+    boolean started() {
+        return game != null;
+    }
 
     Room(String code, PlayerSession host, int targetScore, boolean isPublic) {
         this.code = code;
@@ -36,7 +40,7 @@ final class Room {
         if (guest != null) {
             members.add(new RoomMember(guest.nickname, false, guestReady));
         }
-        return new RoomUpdate(code, targetScore, isPublic, started, members);
+        return new RoomUpdate(code, targetScore, isPublic, started(), members);
     }
 
     RoomInfo summary() {

@@ -2,6 +2,7 @@ package org.example.server;
 
 import hockey.common.protocol.Message.*;
 import hockey.common.protocol.MessageCodec;
+import hockey.common.rules.MatchEngine.Phase;
 
 import java.io.BufferedReader;
 import java.io.DataInputStream;
@@ -35,6 +36,7 @@ public final class LobbySelfTest {
             try {
                 registration(port);
                 waitingRoom(port);
+                normalGame(port);
                 concurrentJoin(port);
                 disconnectCleanup(port);
                 System.out.println("LobbySelfTest: 접속·방·권한·동시 입장·연결 종료 모두 통과");
@@ -64,6 +66,8 @@ public final class LobbySelfTest {
             check(second.next(HelloFailed.class).reason() == HelloFailReason.DUPLICATE_NICKNAME, "닉네임 중복");
             second.send(new Hello(" "));
             check(second.next(HelloFailed.class).reason() == HelloFailReason.INVALID_NICKNAME, "빈 이름");
+            second.send(new Hello("bad name"));
+            check(second.next(HelloFailed.class).reason() == HelloFailReason.INVALID_NICKNAME, "허용되지 않는 이름");
             second.send(new Hello("성진"));
             check(!token.equals(second.next(Welcome.class).token()), "토큰 분리");
             second.send(new Hello("다른이름"));
@@ -93,14 +97,14 @@ public final class LobbySelfTest {
             host.send(new Ready(true));
             host.failure("READY", RoomFailReason.GUEST_ONLY);
             guest.send(new JoinRoom("XXXXX"));
-            check(guest.next(JoinFailed.class).reason() == RoomFailReason.NOT_FOUND, "없는 코드");
+            guest.failure("JOIN_ROOM", RoomFailReason.NOT_FOUND);
             guest.send(new JoinRoom(" " + code.toLowerCase(Locale.ROOT) + " "));
             sameRoom(host, guest, r -> r.members().size() == 2);
             observer.listWith(list -> list.rooms().stream().anyMatch(r -> r.code().equals(code) && r.playerCount() == 2));
             observer.send(new JoinRoom(code));
-            check(observer.next(JoinFailed.class).reason() == RoomFailReason.FULL, "세 번째 입장 거절");
+            observer.failure("JOIN_ROOM", RoomFailReason.FULL);
             guest.send(new JoinRoom(code));
-            check(guest.next(JoinFailed.class).reason() == RoomFailReason.ALREADY_IN_ROOM, "중복 입장 거절");
+            guest.failure("JOIN_ROOM", RoomFailReason.ALREADY_IN_ROOM);
             guest.send(new Settings(7, false));
             guest.failure("SETTINGS", RoomFailReason.HOST_ONLY);
             guest.send(new Start());
@@ -143,10 +147,36 @@ public final class LobbySelfTest {
             guest.send(new Ready(false));
             guest.failure("READY", RoomFailReason.STARTED);
             observer.send(new JoinRoom(code));
-            check(observer.next(JoinFailed.class).reason() == RoomFailReason.STARTED, "시작한 방 입장 거절");
+            observer.failure("JOIN_ROOM", RoomFailReason.STARTED);
+
+            check(host.next(State.class).ackSeq() == -1 && guest.next(State.class).ackSeq() == -1, "초기 입력 번호");
+            host.send(new Input(5, 100, 900));
+            guest.send(new Input(9, 500, 100));
+            host.send(new Input(6, Double.NaN, 750));
+            host.send(new Input(4, 500, 750));
+            State a = host.stateWithAck(5);
+            State b = guest.stateWithAck(9);
+            check(a.snapshot().tick() > 0 && b.snapshot().tick() > 0, "틱 진행");
+            host.send(new Input(7, 100, 900));
+            check(host.stateWithAck(7).ackSeq() == 7, "유효 입력으로 보정");
 
             host.send(new LeaveRoom());
-            host.next(RoomLeft.class);
+            host.failure("LEAVE_ROOM", RoomFailReason.STARTED);
+            guest.send(new LeaveGame());
+            GameOver over = new GameOver(0, 0, 0, GameOverReason.FORFEIT);
+            check(host.next(GameOver.class).equals(over) && guest.next(GameOver.class).equals(over), "게스트 기권");
+            sameRoom(host, guest, r -> !r.started() && !r.members().get(1).ready());
+
+            guest.send(new Ready(true));
+            sameRoom(host, guest, r -> r.members().get(1).ready());
+            host.send(new Start());
+            sameRoom(host, guest, RoomUpdate::started);
+            host.next(GameStart.class);
+            guest.next(GameStart.class);
+            check(guest.next(State.class).ackSeq() == -1, "재대결 입력 번호 초기화");
+            host.send(new Quit());
+            check(guest.next(GameOver.class).equals(new GameOver(1, 0, 0, GameOverReason.FORFEIT)), "방장 연결 종료");
+
             RoomUpdate promoted = guest.next(RoomUpdate.class);
             check(!promoted.started() && promoted.members().equals(List.of(new RoomMember("손님", true, false))),
                     "방장 승계와 준비 초기화");
@@ -154,10 +184,47 @@ public final class LobbySelfTest {
             guest.send(new LeaveRoom());
             guest.next(RoomLeft.class);
             observer.listWith(list -> list.rooms().stream().noneMatch(r -> r.code().equals(code)));
-            host.send(new JoinRoom(code));
-            check(host.next(JoinFailed.class).reason() == RoomFailReason.NOT_FOUND, "빈 방 삭제");
-            host.send(new LeaveRoom());
-            host.failure("LEAVE_ROOM", RoomFailReason.NOT_IN_ROOM);
+            observer.send(new JoinRoom(code));
+            observer.failure("JOIN_ROOM", RoomFailReason.NOT_FOUND);
+            observer.send(new LeaveRoom());
+            observer.failure("LEAVE_ROOM", RoomFailReason.NOT_IN_ROOM);
+        }
+    }
+
+    private static void normalGame(int port) throws Exception {
+        try (Peer host = login(port, "득점방장"); Peer guest = login(port, "득점손님")) {
+            host.send(new CreateRoom(3, false));
+            guest.send(new JoinRoom(host.next(RoomUpdate.class).code()));
+            sameRoom(host, guest, r -> r.members().size() == 2);
+            guest.send(new Ready(true));
+            sameRoom(host, guest, r -> r.members().get(1).ready());
+            host.send(new Start());
+            sameRoom(host, guest, RoomUpdate::started);
+            host.next(GameStart.class);
+            guest.next(GameStart.class);
+
+            // 서브 쪽은 정면으로 슛하고, 상대 말렛은 골대 중앙에서 비켜 준다.
+            for (int seq = 0; seq < 1_500; seq++) {
+                State first = host.next(State.class);
+                State second = guest.next(State.class);
+                var state = first.snapshot();
+                check(state.equals(second.snapshot()), "동일한 틱의 물리 상태와 점수");
+                if (state.phase() == Phase.FINISHED) {
+                    GameOver result = host.next(GameOver.class);
+                    check(result.equals(guest.next(GameOver.class)), "양쪽 경기 결과 일치");
+                    check(result.reason() == GameOverReason.NORMAL && state.score(result.winner()) == 3,
+                            "목표 점수 도달로 정상 종료");
+                    check(result.score0() == state.score0() && result.score1() == state.score1(), "최종 점수 일치");
+                    sameRoom(host, guest, r -> !r.started() && !r.members().get(1).ready());
+                    return;
+                }
+                boolean playing = state.phase() == Phase.PLAYING;
+                host.send(new Input(seq, state.server() == 0 ? 300 : 40,
+                        state.server() == 0 && playing ? 510 : 900));
+                guest.send(new Input(seq, state.server() == 1 ? 300 : 40,
+                        state.server() == 1 && playing ? 490 : 100));
+            }
+            throw new AssertionError("목표 점수까지 경기를 완료하지 못했습니다.");
         }
     }
 
@@ -182,7 +249,7 @@ public final class LobbySelfTest {
                     });
                     List<Reply> replies = List.of(first.get(5, TimeUnit.SECONDS), second.get(5, TimeUnit.SECONDS));
                     check(replies.stream().filter(r -> r instanceof RoomUpdate).count() == 1, "마지막 자리 한 명 성공");
-                    check(replies.stream().filter(r -> r.equals(new JoinFailed(RoomFailReason.FULL))).count() == 1,
+                    check(replies.stream().filter(r -> r.equals(new RoomFailed("JOIN_ROOM", RoomFailReason.FULL))).count() == 1,
                             "동시 입장 한 명 거절");
                     check(host.next(RoomUpdate.class).members().size() == 2, "정원 2명");
                 }
@@ -259,11 +326,23 @@ public final class LobbySelfTest {
 
         <T extends Reply> T next(Class<T> type) throws IOException {
             Reply reply = read();
-            while (reply instanceof RoomList && type != RoomList.class) {
+            while ((reply instanceof RoomList && type != RoomList.class)
+                    || (reply instanceof State && type != State.class)) {
                 reply = read();
             }
             check(type.isInstance(reply), "예상 " + type.getSimpleName() + ", 수신 " + reply);
             return type.cast(reply);
+        }
+
+        State stateWithAck(int expected) throws IOException {
+            for (int i = 0; i < 60; i++) {
+                State state = next(State.class);
+                check(state.ackSeq() <= expected, "잘못된 입력 번호 " + state.ackSeq());
+                if (state.ackSeq() == expected) {
+                    return state;
+                }
+            }
+            throw new AssertionError("입력 응답이 오지 않았습니다: " + expected);
         }
 
         void failure(String command, RoomFailReason reason) throws IOException {

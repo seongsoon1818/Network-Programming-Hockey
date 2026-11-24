@@ -1,6 +1,7 @@
 package org.example.server;
 
 import hockey.common.protocol.Message.*;
+import hockey.common.protocol.Nicknames;
 import hockey.common.protocol.Protocol;
 
 import java.security.SecureRandom;
@@ -45,7 +46,14 @@ final class Lobby implements Runnable {
             register(client, hello.nickname());
             return;
         }
+        // INPUT은 GAME_OVER를 받기 직전까지 올 수 있다.
         PlayerSession player = players.get(client);
+        if (request instanceof Input input) {
+            if (player != null && player.room != null && player.room.started()) {
+                player.room.game.input(player.room.host == player ? 0 : 1, input);
+            }
+            return;
+        }
         if (player == null) {
             fail(client, commandOf(request), RoomFailReason.NOT_REGISTERED);
             return;
@@ -60,13 +68,26 @@ final class Lobby implements Runnable {
             case Ready m -> setReady(player, m.ready());
             case Settings m -> changeSettings(player, m);
             case Start m -> startGame(player);
+            case LeaveGame m -> {
+                Room room = player.room;
+                if (room != null && room.started()) {
+                    room.game.forfeit(room.host == player ? 0 : 1);
+                }
+            }
             case LeaveRoom m -> {
-                if (requireRoom(player, Protocol.LEAVE_ROOM) != null) {
+                if (requireWaitingRoom(player, Protocol.LEAVE_ROOM) != null) {
                     leaveRoom(player);
                     client.send(new RoomLeft());
                     publishRooms();
                 }
             }
+            case Kick m -> {
+                if (requireWaitingRoom(player, Protocol.KICK) != null) {
+                    fail(client, Protocol.KICK, RoomFailReason.UNKNOWN);
+                }
+            }
+            case Invite m -> fail(client, Protocol.INVITE, RoomFailReason.UNKNOWN);
+            case InviteReply m -> fail(client, Protocol.INVITE_REPLY, RoomFailReason.NO_SUCH_INVITE);
             default -> throw new IllegalArgumentException("로비에서 처리할 수 없는 요청입니다.");
         }
     }
@@ -82,6 +103,11 @@ final class Lobby implements Runnable {
             case Settings m -> Protocol.SETTINGS;
             case Start m -> Protocol.START;
             case LeaveRoom m -> Protocol.LEAVE_ROOM;
+            case Kick m -> Protocol.KICK;
+            case Invite m -> Protocol.INVITE;
+            case InviteReply m -> Protocol.INVITE_REPLY;
+            case Input m -> Protocol.INPUT;
+            case LeaveGame m -> Protocol.LEAVE_GAME;
         };
     }
 
@@ -91,7 +117,7 @@ final class Lobby implements Runnable {
             return;
         }
         String nickname = rawName.strip();
-        if (nickname.isEmpty()) {
+        if (!Nicknames.isValid(nickname)) {
             client.send(new HelloFailed(HelloFailReason.INVALID_NICKNAME));
             return;
         }
@@ -144,7 +170,7 @@ final class Lobby implements Runnable {
             fail(player.connection, Protocol.JOIN_ROOM, RoomFailReason.NOT_FOUND);
             return;
         }
-        if (room.started) {
+        if (room.started()) {
             fail(player.connection, Protocol.JOIN_ROOM, RoomFailReason.STARTED);
             return;
         }
@@ -169,7 +195,7 @@ final class Lobby implements Runnable {
 
     private Room requireWaitingRoom(PlayerSession player, String command) {
         Room room = requireRoom(player, command);
-        if (room != null && room.started) {
+        if (room != null && room.started()) {
             fail(player.connection, command, RoomFailReason.STARTED);
             return null;
         }
@@ -224,10 +250,36 @@ final class Lobby implements Runnable {
             fail(player.connection, Protocol.START, RoomFailReason.NOT_READY);
             return;
         }
-        room.started = true;
+        room.game = new GameRoom(room, result -> events.add(() -> finishGame(room, result)));
         room.broadcast();
         room.host.connection.send(new GameStart(room.code, 0, room.targetScore));
         room.guest.connection.send(new GameStart(room.code, 1, room.targetScore));
+        publishRooms();
+        room.game.start();
+    }
+
+    private void finishGame(Room room, GameOver result) {
+        PlayerSession host = room.host;
+        PlayerSession guest = room.guest;
+        boolean hostConnected = players.containsKey(host.connection);
+        boolean guestConnected = players.containsKey(guest.connection);
+        if (hostConnected) {
+            host.connection.send(result);
+        }
+        if (guestConnected) {
+            guest.connection.send(result);
+        }
+        room.game = null;
+        room.guestReady = false;
+        if (!hostConnected) {
+            leaveRoom(host);
+        }
+        if (!guestConnected) {
+            leaveRoom(guest);
+        }
+        if (hostConnected && guestConnected) {
+            room.broadcast();
+        }
         publishRooms();
     }
 
@@ -242,7 +294,6 @@ final class Lobby implements Runnable {
         }
         room.guest = null;
         room.guestReady = false;
-        room.started = false;
         if (room.host == null) {
             rooms.remove(room.code);
         } else {
@@ -252,7 +303,7 @@ final class Lobby implements Runnable {
 
     private RoomList roomList() {
         return new RoomList(rooms.values().stream()
-                .filter(room -> room.isPublic && !room.started)
+                .filter(room -> room.isPublic && !room.started())
                 .map(Room::summary).toList());
     }
 
@@ -266,17 +317,18 @@ final class Lobby implements Runnable {
     }
 
     private static void fail(ClientConnection client, String command, RoomFailReason reason) {
-        if (command.equals(Protocol.JOIN_ROOM)) {
-            client.send(new JoinFailed(reason));
-        } else {
-            client.send(new RoomFailed(command, reason));
-        }
+        client.send(new RoomFailed(command, reason));
     }
 
     private void unregister(ClientConnection client) {
         PlayerSession player = players.remove(client);
         if (player != null) {
-            leaveRoom(player);
+            Room room = player.room;
+            if (room != null && room.started()) {
+                room.game.forfeit(room.host == player ? 0 : 1);
+            } else {
+                leaveRoom(player);
+            }
             playersByName.remove(player.nickname);
             logConnection(player.nickname, "님이 접속을 종료했습니다.");
             publishRooms();
