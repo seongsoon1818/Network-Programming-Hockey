@@ -48,7 +48,7 @@ public final class PhysicsConstants {
     public static final double GOAL_RIGHT = GOAL_LEFT + GOAL_WIDTH;
 
     public static final double MALLET_MAX_SPEED = 6000; // px/s
-    public static final double PUCK_MAX_SPEED = 1800;   // px/s (1600은 조금 느리다는 의견으로 올림)
+    public static final double PUCK_MAX_SPEED = 2200;   // px/s
     /**
      * 퍽을 칠 때 말렛이 들어가는 최고 속도. 퍽 최고 속도보다 빠르면 친 퍽을 다시 따라잡아
      * 옆으로 밀어내므로 겨눈 방향으로 안 나간다. 퍽에 닿지 않는 이동은 MALLET_MAX_SPEED로 빠르게.
