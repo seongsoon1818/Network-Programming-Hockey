@@ -194,16 +194,32 @@ public final class MatchEngineSelfTest {
         MatchEngine b = new MatchEngine(99, new Random(6));
         Random inputs = new Random(7);
         boolean[] seen = new boolean[Phase.values().length];
+        // 멈춤(카운트다운·골·시간 초과)마다 번갈아, 한 번은 둘 다 제자리에서 기다려 시간 초과를 내고
+        // 한 번은 퍽을 쫓아 골을 낸다. 물리 상수가 바뀌어도 모든 단계를 거치게 하려는 것이다.
+        int pauses = 1; // 시작 카운트다운
+        Phase previous = a.phase();
         for (int t = 0; t < 120 * TICK_RATE; t++) {
             if (t % 37 == 0) {
                 b.restore(a.snapshot());
                 check(b.snapshot().equals(a.snapshot()), "되돌린 직후 같은 상태 (tick " + t + ")");
             }
-            // 가끔은 퍽을 쫓아 골·시간 초과가 나게 한다.
-            boolean chase = t % 120 < 60;
-            double x0 = chase ? a.state().puckX : inputs.nextDouble() * FIELD_WIDTH;
-            double y0 = chase ? a.state().puckY + 30 : inputs.nextDouble() * FIELD_HEIGHT;
-            double x1 = inputs.nextDouble() * FIELD_WIDTH, y1 = inputs.nextDouble() * FIELD_HEIGHT;
+            if (a.phase() != Phase.PLAYING && previous == Phase.PLAYING) {
+                pauses++;
+            }
+            previous = a.phase();
+            double x0, y0, x1, y1;
+            if (pauses % 2 == 1) {
+                x0 = HOME_X[0];
+                y0 = HOME_Y[0];
+                x1 = HOME_X[1];
+                y1 = HOME_Y[1];
+            } else {
+                boolean chase = t % 120 < 60;
+                x0 = chase ? a.state().puckX : inputs.nextDouble() * FIELD_WIDTH;
+                y0 = chase ? a.state().puckY + 30 : inputs.nextDouble() * FIELD_HEIGHT;
+                x1 = inputs.nextDouble() * FIELD_WIDTH;
+                y1 = inputs.nextDouble() * FIELD_HEIGHT;
+            }
             int ea = a.tick(x0, y0, x1, y1);
             int eb = b.tick(x0, y0, x1, y1);
             check(ea == eb && a.snapshot().equals(b.snapshot()), "되돌린 뒤 같은 진행 (tick " + t + ")");
