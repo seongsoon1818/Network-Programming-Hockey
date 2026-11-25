@@ -153,10 +153,6 @@ public final class ClientFrame extends JFrame {
                 lobbyPanel.showStatus("방에서 나왔습니다.", false);
                 sendRequest(new ListRooms());
             }
-            case JoinFailed m -> {
-                showRoomError(m.reason());
-                sendRequest(new ListRooms());
-            }
             case RoomFailed m -> {
                 if (m.command().equals(Protocol.INVITE)) {
                     pendingInvitee = null;

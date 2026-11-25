@@ -33,7 +33,6 @@ public final class Protocol {
     public static final String ROOM_UPDATE = "ROOM_UPDATE";
     public static final String ROOM_LIST = "ROOM_LIST";
     public static final String ROOM_LEFT = "ROOM_LEFT";
-    public static final String JOIN_FAILED = "JOIN_FAILED";
     public static final String ROOM_FAILED = "ROOM_FAILED";
     public static final String GAME_START = "GAME_START";
     public static final String USER_LIST = "USER_LIST";

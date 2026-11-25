@@ -58,11 +58,8 @@ public sealed interface Message {
     }
 
     record RoomLeft() implements Reply {}
-    /**
-     * 입장 실패. 확정된 형식에서는 ROOM_FAILED(JOIN_ROOM, 사유)로 합쳤다.
-     * 서버가 ROOM_FAILED로 바꿀 때까지 남겨 두고, 클라이언트는 둘 다 같은 안내로 처리한다.
-     */
-    record JoinFailed(RoomFailReason reason) implements Reply {}
+
+    /** 방·초대·내보내기 명령이 안 될 때. 입장 실패도 이것으로 온다(command = JOIN_ROOM). */
     record RoomFailed(String command, RoomFailReason reason) implements Reply {}
 
     /** 시작 승인. side는 방장 0, 게스트 1이다. 이어서 매 틱 STATE가 온다. */

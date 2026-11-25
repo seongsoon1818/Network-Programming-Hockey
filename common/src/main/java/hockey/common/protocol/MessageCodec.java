@@ -96,7 +96,6 @@ public final class MessageCodec {
             case Protocol.ROOM_UPDATE -> readRoom(in);
             case Protocol.ROOM_LIST -> readRooms(in);
             case Protocol.ROOM_LEFT -> new RoomLeft();
-            case Protocol.JOIN_FAILED -> new JoinFailed(RoomFailReason.fromWire(in.readUTF()));
             case Protocol.ROOM_FAILED -> new RoomFailed(in.readUTF(), RoomFailReason.fromWire(in.readUTF()));
             case Protocol.GAME_START -> new GameStart(in.readUTF(), in.readInt(), in.readInt());
             case Protocol.USER_LIST -> readUsers(in);
@@ -145,10 +144,6 @@ public final class MessageCodec {
                 }
             }
             case RoomLeft m -> out.writeUTF(Protocol.ROOM_LEFT);
-            case JoinFailed m -> {
-                out.writeUTF(Protocol.JOIN_FAILED);
-                out.writeUTF(m.reason().name());
-            }
             case RoomFailed m -> {
                 out.writeUTF(Protocol.ROOM_FAILED);
                 out.writeUTF(m.command());
